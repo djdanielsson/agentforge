@@ -1,0 +1,321 @@
+# AgentForge Helm values.
+#
+# Everything the control plane needs lives here. The templates never hardcode
+# credentials, image tags or endpoints; if a value is absent they fail loudly
+# rather than guess.
+#
+# The one decision you cannot skip: where the database lives. Leave
+# `postgres.enabled: true` for the bundled single-replica Postgres, or turn it
+# off and point `externalDatabase` at a managed instance. There is no third
+# option and no default password.
+
+# Override the chart's generated names. Set fullnameOverride when you want a
+# stable name across releases (for example, when a DNS record points at it).
+nameOverride: ""
+fullnameOverride: ""
+
+# Pull secrets applied to every pod the chart creates. Each entry is an
+# imagePullSecret reference, not a literal credential.
+imagePullSecrets: []
+
+# Annotations and labels added to every pod. Use these for a service mesh
+# sidecar injector or a Prometheus scrape annotation.
+podAnnotations: {}
+podLabels: {}
+
+# Scheduling knobs shared by every pod.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Pod-level security context for the API, orchestrator and web pods. These
+# assume the images declare a non-root USER; set runAsNonRoot: false if you build
+# them root-only. Postgres has its own context (postgres.podSecurityContext).
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level security context for the API, orchestrator and web containers.
+# readOnlyRootFilesystem is off by default because it needs image support (a
+# writable /tmp, no bytecode writes); turn it on once your images are ready.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+# ---------------------------------------------------------------------------
+# Control-plane API (FastAPI)
+# ---------------------------------------------------------------------------
+api:
+  replicaCount: 1
+
+  image:
+    # Point this at the image you build from apps/api.
+    repository: ghcr.io/agentforge/api
+    # Empty tag means "use .Chart.AppVersion", so a chart bump moves the image.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  containerPort: 8000
+
+  service:
+    type: ClusterIP
+    port: 8000
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  # Liveness stays on the unversioned /health so a probe never breaks when the
+  # API version moves; readiness uses the versioned health route.
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      path: /api/v1/health
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    # The API imports SQLAlchemy, the k8s client and opens the DB pool at boot;
+    # the startup probe keeps the liveness probe from killing a slow first boot.
+    startup:
+      path: /health
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 30
+
+# ---------------------------------------------------------------------------
+# Orchestrator worker
+# ---------------------------------------------------------------------------
+orchestrator:
+  # The loop leases one task at a time from the shared queue, so more than one
+  # replica is safe but only useful once task volume saturates a single poller.
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/agentforge/orchestrator
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # Give an in-flight cycle time to finish on SIGTERM before the container dies.
+  terminationGracePeriodSeconds: 30
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # The orchestrator has no HTTP surface, so probes check that the interpreter
+  # and the application import cleanly. A wedged loop is not detectable from
+  # outside without an app-side heartbeat; this catches a broken image instead.
+  probes:
+    liveness:
+      command:
+        - python
+        - -c
+        - import agentforge_orchestrator.main
+      initialDelaySeconds: 15
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Dashboard (nginx serving the Vite build, proxying /api)
+# ---------------------------------------------------------------------------
+web:
+  replicaCount: 1
+
+  image:
+    # Must be an nginx image with the built assets at /usr/share/nginx/html and
+    # able to run as a non-root user on port 8080 (nginx-unprivileged fits).
+    # The chart supplies the server config, so the image only carries assets.
+    repository: ghcr.io/agentforge/web
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  containerPort: 8080
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  probes:
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      path: /
+      initialDelaySeconds: 3
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+postgres:
+  # true  -> bundled StatefulSet below.
+  # false -> externalDatabase must be set.
+  enabled: true
+
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+
+  auth:
+    username: agentforge
+    database: agentforge
+    # Required when enabled. The chart refuses to render without it, so a
+    # default password can never leak into a repo or a release.
+    # Supply with --set postgres.auth.password=... or a values file you keep
+    # out of version control.
+    password: ""
+
+  service:
+    port: 5432
+
+  persistence:
+    # false -> emptyDir, which loses everything on reschedule. For dev only.
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+  # fsGroup 70 matches the postgres:16-alpine user (uid/gid 70). Switch to 999
+  # if you use the Debian-based image, or the data dir will not be writable.
+  podSecurityContext:
+    fsGroup: 70
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+  probes:
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 15
+      timeoutSeconds: 5
+      failureThreshold: 5
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 5
+
+# Used only when postgres.enabled is false. Exactly one of these is required:
+#   url            - the full SQLAlchemy URL, stored in the chart's Secret
+#   existingSecret - a Secret you manage that already holds the URL
+externalDatabase:
+  url: ""
+  existingSecret: ""
+  existingSecretKey: database-url
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+auth:
+  # false leaves the API open to anyone who can reach it. Any real deployment
+  # sets this true.
+  enabled: false
+
+  # Created on first boot so automation has a way in. Shown once, stored hashed.
+  # Leave empty to manage keys entirely through the API after first login.
+  bootstrapApiKey: ""
+
+  # Bring your own Secret for the bootstrap key instead of storing it here.
+  existingSecret: ""
+  existingSecretKey: bootstrap-api-key
+
+# ---------------------------------------------------------------------------
+# Application configuration (the non-secret AGENTFORGE_* env)
+# ---------------------------------------------------------------------------
+config:
+  environment: production
+  logLevel: INFO
+
+  # Browser origins allowed to call the API. Empty means "no cross-origin
+  # access", which is right when the dashboard and API share an origin through
+  # the Ingress.
+  corsOrigins: []
+
+  # Workspaces: each project becomes a namespace named "<prefix>-<project>".
+  workspaceNamespacePrefix: af
+  # Backing provider for workspaces. "kubernetes" is the only sensible value
+  # inside a cluster; "podman" and "local" are laptop-development providers.
+  workspaceProvider: kubernetes
+  workspaceImage: ghcr.io/coder/code-server:latest
+  # Agent runtime container that runs alongside code-server in the workspace.
+  workspaceAgentImage: ghcr.io/all-hands-ai/openhands:latest
+  workspaceCpuRequest: 500m
+  workspaceMemoryRequest: 1Gi
+  workspaceStorage: 10Gi
+  workspaceStorageClass: ""
+  workspaceCodeServerPort: 8080
+
+  openhandsUrl: http://openhands.agentforge.svc.cluster.local:3000
+  llmGatewayUrl: http://litellm.agentforge.svc.cluster.local:4000
+  defaultAgentModel: local-coder
+
+# ---------------------------------------------------------------------------
+# RBAC: one identity for the API and the orchestrator
+# ---------------------------------------------------------------------------
+# Both processes reconcile the same workspaces, so they share one identity and
+# therefore one set of permissions. The ClusterRole is cluster-wide because the
+# namespaces it creates do not exist yet and cannot be scoped in advance.
+serviceAccount:
+  create: true
+  # Defaults to "<release>-agentforge-control-plane" when empty.
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+# ---------------------------------------------------------------------------
+# Ingress (optional)
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+
+  host: agentforge.example.com
+
+  # The API path is routed to the API Service and everything else to the
+  # dashboard, so the browser sees one origin and there is no CORS dance.
+  pathType: Prefix
+
+  # e.g. [{ secretName: agentforge-tls }]
+  tls: []

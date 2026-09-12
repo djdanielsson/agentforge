@@ -1,0 +1,10 @@
+# Development namespace: a throwaway control plane that runs the API straight
+# from a local source checkout.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+    pod-security.kubernetes.io/enforce: baseline

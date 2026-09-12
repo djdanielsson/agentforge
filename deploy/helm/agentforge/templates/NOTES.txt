@@ -1,0 +1,47 @@
+AgentForge {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components
+----------
+  API           {{ include "agentforge.api.fullname" . }}:{{ .Values.api.service.port }} (in-cluster)
+  Orchestrator  {{ include "agentforge.orchestrator.fullname" . }} ({{ .Values.orchestrator.replicaCount }} replica(s), no service)
+  Dashboard     {{ include "agentforge.web.fullname" . }}:{{ .Values.web.service.port }} (in-cluster)
+  Database      {{- if .Values.postgres.enabled }} bundled {{ include "agentforge.postgres.fullname" . }}:{{ .Values.postgres.service.port }} (single replica){{ else }} external, from {{ if .Values.externalDatabase.existingSecret }}Secret "{{ .Values.externalDatabase.existingSecret }}"{{ else }}your values{{ end }}{{ end }}
+
+Reach the API
+-------------
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agentforge.api.fullname" . }} {{ .Values.api.service.port }}:{{ .Values.api.service.port }}
+  curl -s localhost:{{ .Values.api.service.port }}/health
+  API docs: http://localhost:{{ .Values.api.service.port }}/api/v1/docs
+
+Reach the dashboard
+-------------------
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agentforge.web.fullname" . }} 8080:{{ .Values.web.service.port }}
+  open http://localhost:8080
+{{- if .Values.ingress.enabled }}
+
+  Or use the Ingress at https://{{ .Values.ingress.host }}/ (paths /api and /).
+{{- end }}
+
+{{- if not .Values.auth.enabled }}
+
+WARNING: AGENTFORGE_AUTH_ENABLED is false. The API is open to anyone who can
+reach it. Set auth.enabled=true before exposing this beyond localhost, then
+create a key or supply auth.bootstrapApiKey.
+{{- else }}
+
+Authentication is on. Mint the first key with:
+  curl -s -X POST localhost:{{ .Values.api.service.port }}/api/v1/keys -H 'X-API-Key: <bootstrap key>'
+{{- end }}
+
+Workspace permissions
+---------------------
+The ServiceAccount "{{ include "agentforge.serviceAccountName" . }}" holds a cluster-wide
+ClusterRole, because each project becomes its own namespace (prefix
+"{{ .Values.config.workspaceNamespacePrefix }}-"). Verify it with:
+  kubectl auth can-i create namespaces --as=system:serviceaccount:{{ .Release.Namespace }}:{{ include "agentforge.serviceAccountName" . }}
+
+{{- if and .Values.postgres.enabled .Values.postgres.persistence.enabled }}
+
+Database data lives in PVC "data-{{ include "agentforge.postgres.fullname" . }}-0". Deleting the release
+does not delete it; remove it by hand when you mean it.
+{{- end }}

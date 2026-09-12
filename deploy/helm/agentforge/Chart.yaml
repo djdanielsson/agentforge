@@ -1,0 +1,22 @@
+apiVersion: v2
+name: agentforge
+description: >-
+  AgentForge control plane: FastAPI API, orchestrator worker, dashboard, the
+  bundled or external Postgres it runs on, and the cluster-wide RBAC it needs to
+  give every project its own Kubernetes namespace.
+type: application
+
+# Chart version tracks the chart, appVersion tracks the images. They move
+# independently because the templates change far less often than the apps.
+version: 0.1.0
+appVersion: "0.1.0"
+
+# The workspace controller uses networking.k8s.io/v1 NetworkPolicies and the
+# stable (non-beta) Ingress API.
+kubeVersion: ">=1.25.0-0"
+
+keywords:
+  - agentforge
+  - ai-agents
+  - control-plane
+  - orchestrator

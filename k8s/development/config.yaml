@@ -1,0 +1,61 @@
+# Non-secret configuration for the development API.
+#
+# The same AGENTFORGE_* env the chart sets, but pointed at the in-cluster dev
+# Postgres and tuned for a laptop cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentforge-dev
+  namespace: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+data:
+  AGENTFORGE_ENVIRONMENT: development
+  AGENTFORGE_LOG_LEVEL: DEBUG
+
+  # Open during development. Never do this on a shared or public cluster.
+  AGENTFORGE_AUTH_ENABLED: "false"
+
+  # The API runs inside k3s, so it uses its ServiceAccount rather than a
+  # kubeconfig file.
+  AGENTFORGE_K8S_IN_CLUSTER: "true"
+
+  # Vite dev server and any local tooling hitting the API directly.
+  AGENTFORGE_CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000"]'
+
+  # Each project becomes this namespace at runtime.
+  AGENTFORGE_WORKSPACE_NAMESPACE_PREFIX: af
+  AGENTFORGE_WORKSPACE_IMAGE: ghcr.io/coder/code-server:latest
+  AGENTFORGE_WORKSPACE_CPU_REQUEST: 500m
+  AGENTFORGE_WORKSPACE_MEMORY_REQUEST: 1Gi
+  AGENTFORGE_WORKSPACE_STORAGE: 5Gi
+  AGENTFORGE_WORKSPACE_CODE_SERVER_PORT: "8080"
+
+  # Placeholders: point these at wherever OpenHands and LiteLLM actually run.
+  # From inside a pod, a service on the host is reachable at the node IP or
+  # "<svc>.<ns>.svc.cluster.local"; a local process is not reachable at all.
+  AGENTFORGE_OPENHANDS_URL: http://openhands.agentforge-dev.svc.cluster.local:3000
+  AGENTFORGE_LLM_GATEWAY_URL: http://litellm.agentforge-dev.svc.cluster.local:4000
+  AGENTFORGE_DEFAULT_AGENT_MODEL: local-coder
+---
+# Development-only credentials. These are convenience values for a disposable
+# k3s cluster, not secrets in any real sense: they are committed on purpose so a
+# fresh checkout comes up in one command. Do not copy this pattern into anything
+# that holds data you care about.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agentforge-dev
+  namespace: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+type: Opaque
+stringData:
+  # Must line up with postgres.yaml below (service name "postgres", same
+  # user/password/database).
+  database-url: postgresql+psycopg://agentforge:dev-only-change-me@postgres:5432/agentforge
+  postgres-password: dev-only-change-me
+  # Leave empty for an open dev API; set a value to bootstrap a key on first boot.
+  bootstrap-api-key: ""

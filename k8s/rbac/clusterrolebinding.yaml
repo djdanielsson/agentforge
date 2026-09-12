@@ -1,0 +1,20 @@
+# Grants the control-plane ServiceAccount the cluster role above.
+#
+# Namespaced and cluster roles cannot be referenced across namespaces: the
+# subject below is a ServiceAccount in "agentforge", and the role is the
+# cluster-scoped one, which is exactly what a ClusterRoleBinding expresses.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentforge-control-plane
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: control-plane
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentforge-control-plane
+subjects:
+  - kind: ServiceAccount
+    name: agentforge-control-plane
+    namespace: agentforge

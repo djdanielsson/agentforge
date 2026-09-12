@@ -1,0 +1,9 @@
+# Patterns ignored by `helm package`. Keep the packaged chart free of editor and
+# VCS noise; the templates themselves are never ignored.
+.DS_Store
+.git/
+.gitignore
+.helmignore
+*.tmproj
+.vscode/
+.idea/

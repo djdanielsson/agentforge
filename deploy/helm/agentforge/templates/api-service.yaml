@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentforge.api.fullname" . }}
+  labels:
+    {{- include "agentforge.componentLabels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  type: {{ .Values.api.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "agentforge.componentSelectorLabels" (dict "root" $ "component" "api") | nindent 4 }}

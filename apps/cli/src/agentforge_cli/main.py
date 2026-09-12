@@ -1,9 +1,9 @@
 """The `agentforge` CLI — talk to the AgentForge control plane.
 
-    agentforge projects
-    agentforge ask ComplianceFlow "Fix the authentication bug"
-    agentforge fleet
-    agentforge watch ComplianceFlow
+agentforge projects
+agentforge ask ComplianceFlow "Fix the authentication bug"
+agentforge fleet
+agentforge watch ComplianceFlow
 """
 
 from __future__ import annotations

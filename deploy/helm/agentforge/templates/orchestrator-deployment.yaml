@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentforge.orchestrator.fullname" . }}
+  labels:
+    {{- include "agentforge.componentLabels" (dict "root" $ "component" "orchestrator") | nindent 4 }}
+spec:
+  replicas: {{ .Values.orchestrator.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentforge.componentSelectorLabels" (dict "root" $ "component" "orchestrator") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentforge.componentLabels" (dict "root" $ "component" "orchestrator") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "agentforge.serviceAccountName" . }}
+      # Long enough for an in-flight reconcile cycle to finish on SIGTERM; the
+      # loop handles the signal and exits between cycles.
+      terminationGracePeriodSeconds: {{ .Values.orchestrator.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: orchestrator
+          image: "{{ .Values.orchestrator.image.repository }}:{{ .Values.orchestrator.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - agentforge_orchestrator.main
+          {{- include "agentforge.controlPlaneEnv" . | nindent 10 }}
+          # No HTTP surface: the probe proves the interpreter and the application
+          # still import, which catches a broken image or a wedged interpreter.
+          livenessProbe:
+            exec:
+              command:
+                {{- toYaml .Values.orchestrator.probes.liveness.command | nindent 16 }}
+            initialDelaySeconds: {{ .Values.orchestrator.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.orchestrator.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.orchestrator.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.orchestrator.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.orchestrator.resources | nindent 12 }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

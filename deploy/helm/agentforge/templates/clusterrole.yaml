@@ -1,0 +1,54 @@
+{{- if .Values.rbac.create -}}
+{{/*
+Cluster-wide on purpose: every project becomes its own namespace, so the set of
+namespaces this identity touches cannot be known when the role is written. The
+verbs are the smallest set the workspace controller actually calls, plus pod
+logs, which is the only way to debug a workspace that will not start. No CRDs:
+a project is a namespace, not a custom resource.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agentforge.fullname" . }}-control-plane
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+rules:
+  # Namespaces are the unit of isolation: one per project, created and torn down
+  # by the controller.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Workspace pods, plus the exec and log access used to drive and debug them.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  # /workspace for each project.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The stable endpoint the control plane reaches each code-server through.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Workspace events, for readiness reporting.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Read-only, and required: workspace secrets are referenced, not copied. Before
+  # a pod starts, the controller verifies the referenced Secret exists in the
+  # project namespace, so it must be able to read it. No write verbs: AgentForge
+  # never creates or changes a secret in a workspace.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  # NetworkPolicies keep workspaces from talking to each other.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}

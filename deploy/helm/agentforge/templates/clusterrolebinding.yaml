@@ -1,0 +1,24 @@
+{{- if .Values.rbac.create -}}
+{{/*
+Binds the shared control-plane ServiceAccount to the cluster role in this
+release. The API and the orchestrator run under this one identity, so this is the
+only binding that needs to exist.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "agentforge.fullname" . }}-control-plane
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "agentforge.fullname" . }}-control-plane
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agentforge.serviceAccountName" . }}
+    # When serviceAccount.create is false the account is managed outside the
+    # release; it is assumed to live in the release namespace unless you set
+    # serviceAccount.name to a namespaced value and adjust this by hand.
+    namespace: {{ .Release.Namespace }}
+{{- end }}

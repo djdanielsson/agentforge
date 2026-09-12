@@ -1,0 +1,145 @@
+# Development API: runs the FastAPI control plane directly from a local source
+# checkout mounted off the node, so edits on the host take effect on restart
+# with no image build in between.
+#
+# Prerequisites:
+#   1. kubectl apply -f k8s/rbac/      (the cluster role and binding this
+#      ServiceAccount is attached to; it must exist before the binding lands)
+#   2. kubectl apply -f k8s/development/postgres.yaml
+#   3. Change the hostPath below to your checkout, then:
+#      kubectl apply -f k8s/development/api.yaml
+#
+# The orchestrator is intentionally absent: the loop is easier to watch in a
+# terminal (`make orchestrator`) than in a pod while iterating on it.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentforge-dev-control-plane
+  namespace: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+---
+# Reuses the cluster role bootstrapped from k8s/rbac/. Nothing new is granted
+# here, so a dev cluster and a chart install converge on the same permissions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentforge-dev-control-plane
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentforge-control-plane
+subjects:
+  - kind: ServiceAccount
+    name: agentforge-dev-control-plane
+    namespace: agentforge-dev
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentforge-dev-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentforge-dev-api
+        app.kubernetes.io/part-of: agentforge
+    spec:
+      serviceAccountName: agentforge-dev-control-plane
+      containers:
+        - name: api
+          # uv's slim image, so the container uses the same lockfile workflow as
+          # `make api` on the host. Pinned to the interpreter the checkout
+          # targets.
+          image: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+          command: ["sh", "-c"]
+          args:
+            - >-
+              cd /src &&
+              uv sync --frozen --all-packages &&
+              uv run --frozen --package agentforge-api
+              uvicorn agentforge_api.main:app --host 0.0.0.0 --port 8000
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: agentforge-dev
+          env:
+            - name: AGENTFORGE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agentforge-dev
+                  key: database-url
+            # Keep the virtualenv and uv cache out of the checkout: the mount is
+            # read-only, and a root-owned .venv on the host is a nuisance.
+            - name: UV_PROJECT_ENVIRONMENT
+              value: /venv
+            - name: UV_CACHE_DIR
+              value: /venv/uv-cache
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: source
+              mountPath: /src
+              readOnly: true
+            # uv writes the venv and its cache here, never into the checkout.
+            - name: venv
+              mountPath: /venv
+      volumes:
+        - name: source
+          hostPath:
+            # EDIT ME: absolute path to your AgentForge checkout on the k3s node.
+            # k3s runs in a container on some installs, in which case use the
+            # container-visible path (/var/lib/rancher/k3s/... or a mounted dir).
+            path: /path/to/agentforge
+            type: Directory
+        - name: venv
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: agentforge-dev-api

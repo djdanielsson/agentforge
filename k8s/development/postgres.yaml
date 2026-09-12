@@ -1,0 +1,104 @@
+# Single-replica Postgres for development.
+#
+# Deliberately a Deployment, not a StatefulSet: dev data is disposable and a
+# Recreate strategy avoids two pods fighting over a ReadWriteOnce volume. The
+# chart uses a StatefulSet for the real thing.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: agentforge
+    spec:
+      securityContext:
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: agentforge
+            - name: POSTGRES_DB
+              value: agentforge
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentforge-dev
+                  key: postgres-password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "agentforge", "-d", "agentforge"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "agentforge", "-d", "agentforge"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+# Stable name "postgres" inside agentforge-dev, which is exactly what the
+# database-url in config.yaml points at.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: agentforge-dev
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: development
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+  selector:
+    app.kubernetes.io/name: postgres

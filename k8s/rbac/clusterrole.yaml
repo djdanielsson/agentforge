@@ -1,0 +1,57 @@
+# Cluster-wide role for the AgentForge control plane.
+#
+# Cluster scoped on purpose: every project becomes its own namespace, so the set
+# of namespaces this identity touches cannot be known when the role is written.
+# Some of the permissions below are cluster-scoped (namespaces); the rest are
+# namespaced resources that are simply granted in every namespace.
+#
+# This is the plain-YAML twin of the chart's templates/clusterrole.yaml. Keep the
+# two in step when the controller's API calls change. There are no CRDs: a
+# project is a namespace, not a custom resource.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentforge-control-plane
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    app.kubernetes.io/component: control-plane
+rules:
+  # Namespaces are the unit of isolation: one per project, created and torn down
+  # by the controller.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Workspace pods, plus exec (used to run commands inside a workspace) and logs
+  # (the only way to debug a workspace that will not start).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  # /workspace for each project.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The stable endpoint the control plane reaches each code-server through.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Workspace events, for readiness reporting.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Read-only, and required: workspace secrets are referenced, not copied. Before
+  # a pod starts, the controller verifies the referenced Secret exists in the
+  # project namespace, so it must be able to read it. No write verbs: AgentForge
+  # never creates or changes a secret in a workspace.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  # NetworkPolicies keep workspaces from talking to each other.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

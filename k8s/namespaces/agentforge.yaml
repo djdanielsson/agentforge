@@ -1,0 +1,16 @@
+# Control-plane namespace.
+#
+# Workspace namespaces are NOT declared here: the controller creates one per
+# project at runtime, named with the configured prefix (default "af-"). Only the
+# long-lived control plane lives in this file.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentforge
+  labels:
+    app.kubernetes.io/part-of: agentforge
+    # The control plane must not run privileged or host-networked pods. Enforce
+    # the baseline profile; warn on restricted so drift shows up in review.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

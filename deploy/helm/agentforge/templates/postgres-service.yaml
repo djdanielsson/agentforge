@@ -1,0 +1,22 @@
+{{- if .Values.postgres.enabled -}}
+{{/*
+Headless: a single Postgres replica has no need for a load-balanced ClusterIP,
+and a stable per-pod DNS name is exactly what the StatefulSet wants. Clients use
+<name>.<namespace>.svc.cluster.local:5432.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentforge.postgres.fullname" . }}
+  labels:
+    {{- include "agentforge.componentLabels" (dict "root" $ "component" "postgres") | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.service.port }}
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "agentforge.componentSelectorLabels" (dict "root" $ "component" "postgres") | nindent 4 }}
+{{- end }}
