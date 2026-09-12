@@ -33,6 +33,7 @@ from .routers import (
     stream,
     tasks,
     webhooks,
+    workspace,
 )
 from .security import ensure_bootstrap_key
 
@@ -93,6 +94,7 @@ def create_app() -> FastAPI:
         secrets,
         webhooks,
         stream,
+        workspace,
     ):
         v1.include_router(module.router)
     app.include_router(v1)

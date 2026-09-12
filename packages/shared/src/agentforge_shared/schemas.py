@@ -110,6 +110,15 @@ class AgentRead(ORMModel):
     updated_at: datetime
 
 
+class FileWriteRequest(BaseModel):
+    """A write from the editor. The path is resolved inside the workspace."""
+
+    path: str = Field(min_length=1)
+    content: str
+    #: "utf8" for text, "base64" to round-trip a file the editor read as binary.
+    encoding: str = "utf8"
+
+
 class AgentMessageIn(BaseModel):
     """A human turn in the agent conversation."""
 

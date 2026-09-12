@@ -363,3 +363,38 @@ def exec_in_workspace(
         tty=False,
     )
     return result if isinstance(result, str) else str(result)
+
+
+def stream_in_workspace(
+    namespace: str,
+    pod_name: str,
+    *,
+    command: list[str] | None = None,
+    container: str = "code-server",
+    provider: KubernetesProvider | None = None,
+):
+    """Open a bidirectional exec stream into a workspace pod.
+
+    Returns the Kubernetes client's websocket handle — `write_stdin`,
+    `read_stdout`, `read_stderr`, `peek_stdout`, `peek_stderr`, `update`,
+    `is_open`, `close`. `exec_in_workspace` cannot serve a terminal because it
+    waits for the command to finish; this returns as soon as the stream is open,
+    leaving the caller to pump both directions.
+
+    `tty=True` gives the shell a pty, so prompts, colours and line editing behave
+    the way a terminal should. There is no resize channel in the client, so the
+    pty keeps the size it was opened with.
+    """
+    provider = provider or KubernetesProvider()
+    return stream(
+        provider.v1.connect_get_namespaced_pod_exec,
+        pod_name,
+        namespace,
+        command=command or ["/bin/sh", "-c", "command -v bash >/dev/null && exec bash || exec sh"],
+        container=container,
+        stderr=True,
+        stdin=True,
+        stdout=True,
+        tty=True,
+        _preload_content=False,
+    )

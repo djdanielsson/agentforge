@@ -158,6 +158,27 @@ The workspace record carries `provider`, `namespace`, `pvc_name`, `pod_name`,
 (`pending`, `provisioning`, `cloning`, `ready`, `stopped`, `error`, `deleting`,
 `destroyed`).
 
+### Workspace files and terminal
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/projects/{id}/files?path=` | one directory level: name, type, size |
+| GET | `/api/v1/projects/{id}/file?path=` | content; `encoding` is `utf8` or `base64` |
+| PUT | `/api/v1/projects/{id}/file` | `{path, content, encoding}`; 413 past the editor limit |
+| WS | `/api/v1/projects/{id}/terminal` | a pty shell in the workspace pod |
+
+`code_server_url` is an in-cluster Service name, so a browser can never load it —
+embedding it is what it is not for. These endpoints are how the dashboard's editor
+and terminal work instead: the API execs into the workspace pod, so the tools are
+part of the app and the only thing the browser needs is API access.
+
+Paths are resolved inside `/workspace`; anything that escapes it is refused
+rather than normalised. Reads come back base64 on the wire and are labelled
+`utf8` when they decode, so the editor can refuse a binary file instead of
+showing mojibake. The terminal is a real pty (prompts, colours, line editing),
+with the caveat that the Kubernetes client has no resize channel, so the pty keeps
+the size it was opened with.
+
 ### Agents
 
 | Method | Path | Notes |
