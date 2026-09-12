@@ -102,8 +102,9 @@ def build_pod(
     environment: dict[str, str] | None = None,
     code_server_port: int = 8080,
     agent_server_port: int = 3000,
-    agent_uid: int = 42420,
-    agent_gid: int = 42420,
+    #: 0 means "run as root", which the OpenHands image requires.
+    agent_uid: int = 0,
+    agent_gid: int = 0,
     cpu_request: str = "500m",
     memory_request: str = "1Gi",
     cpu_limit: str = "2",
@@ -130,15 +131,39 @@ def build_pod(
     if not permissions.filesystem.workspace:
         raise ValueError("filesystem.workspace must be true; the agent needs somewhere to work")
 
-    # Both containers run as explicit non-root uids, but they are different
-    # uids, and getting the agent one wrong is not obvious.
-    #
-    # The agent runtime image's entrypoint is mode 770 owned by its own user
-    # (42420 in the OpenHands image). Dropping ALL capabilities removes
-    # CAP_DAC_OVERRIDE, so root cannot execute a file it does not own either --
-    # uid 0 fails with EACCES just like any other unprivileged user, and so does
-    # uid 1000. The container has to run as the uid that owns the image's files.
-    def _runtime_security_context(uid: int, gid: int) -> client.V1SecurityContext:
+    def _code_server_security_context() -> client.V1SecurityContext:
+        """code-server ships a `coder` user at uid 1000 and runs there happily."""
+        return client.V1SecurityContext(
+            run_as_user=CODE_SERVER_UID,
+            run_as_group=CODE_SERVER_GID,
+            run_as_non_root=True,
+            allow_privilege_escalation=False,
+            capabilities=client.V1Capabilities(drop=["ALL"]),
+        )
+
+    def _agent_security_context(uid: int, gid: int) -> client.V1SecurityContext:
+        """The agent runtime is the one place we cannot insist on non-root.
+
+        The OpenHands image declares `User: root` and its entrypoint exits with
+        "The OpenHands entrypoint.sh must run as root" for any other uid. It is
+        built to run as root, and with SANDBOX_USER_ID=0 (which the image sets)
+        it runs the server directly rather than trying to create a user or talk
+        to a Docker socket.
+
+        Root still cannot execute that entrypoint with no capabilities: the file
+        is mode 770 owned by uid 42420, so CAP_DAC_OVERRIDE is required. That
+        one capability is added back, and nothing else.
+
+        Set agent_uid to a non-zero value to force a non-root runtime, for an
+        image that supports it.
+        """
+        if uid == 0:
+            return client.V1SecurityContext(
+                run_as_user=0,
+                run_as_group=0,
+                allow_privilege_escalation=False,
+                capabilities=client.V1Capabilities(drop=["ALL"], add=["DAC_OVERRIDE"]),
+            )
         return client.V1SecurityContext(
             run_as_user=uid,
             run_as_group=gid,
@@ -208,7 +233,7 @@ def build_pod(
             requests={"cpu": cpu_request, "memory": memory_request},
             limits={"cpu": cpu_limit, "memory": memory_limit},
         ),
-        security_context=_runtime_security_context(CODE_SERVER_UID, CODE_SERVER_GID),
+        security_context=_code_server_security_context(),
         readiness_probe=client.V1Probe(
             http_get=client.V1HTTPGetAction(path="/healthz", port=code_server_port),
             initial_delay_seconds=5,
@@ -226,7 +251,7 @@ def build_pod(
             requests={"cpu": cpu_request, "memory": memory_request},
             limits={"cpu": cpu_limit, "memory": memory_limit},
         ),
-        security_context=_runtime_security_context(agent_uid, agent_gid),
+        security_context=_agent_security_context(agent_uid, agent_gid),
         readiness_probe=client.V1Probe(
             http_get=client.V1HTTPGetAction(path="/health", port=agent_server_port),
             initial_delay_seconds=10,

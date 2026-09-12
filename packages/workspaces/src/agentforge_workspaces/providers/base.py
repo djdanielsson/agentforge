@@ -48,10 +48,10 @@ class WorkspaceSpec:
 
     code_server_port: int = 8080
     agent_server_port: int = 3000
-    #: uid/gid the agent runtime runs as. Zero means "whatever the image
-    #: declares", which only works if the image's files are world-readable.
-    agent_uid: int = 42420
-    agent_gid: int = 42420
+    #: uid/gid the agent runtime runs as. 0 is root, which the OpenHands image
+    #: requires; a rootless image would use its own user.
+    agent_uid: int = 0
+    agent_gid: int = 0
 
     permissions: AgentPermissions = field(default_factory=AgentPermissions)
     #: References only. The provider resolves them from its own secret store.

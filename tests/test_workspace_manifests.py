@@ -96,29 +96,46 @@ def test_code_server_runs_as_an_explicit_non_root_uid(manifests, permissions):
     assert code_server.security_context.run_as_non_root is True
 
 
-def test_the_agent_runtime_runs_as_the_uid_that_owns_its_image_files(manifests, permissions):
-    """Not root, and not an arbitrary uid either.
+def test_the_agent_runtime_runs_as_root_because_its_image_requires_it(manifests, permissions):
+    """The one place non-root is not achievable.
 
-    The OpenHands entrypoint is mode 770 owned by uid 42420. Dropping ALL
-    capabilities removes CAP_DAC_OVERRIDE, so root cannot execute a file it
-    does not own -- uid 0 fails with EACCES exactly like uid 1000 does. This
-    was found by deploying: both attempts produced
-
-      exec: "/app/entrypoint.sh": permission denied
+    The OpenHands image declares User: root and its entrypoint exits with
+    "The OpenHands entrypoint.sh must run as root" for any other uid. Found by
+    deploying: uid 1000 failed with EACCES on the entrypoint, uid 42420 (which
+    owns the file) started the entrypoint only to be told it must be root.
     """
     pod = _pod(manifests, permissions)
     agent = next(c for c in pod.spec.containers if c.name == "openhands")
-    assert agent.security_context.run_as_user == 42420
-    assert agent.security_context.run_as_group == 42420
-    assert agent.security_context.run_as_non_root is True
+    assert agent.security_context.run_as_user == 0
+    assert agent.security_context.run_as_non_root is None
 
 
-def test_the_agent_uid_is_configurable_for_a_different_image(manifests, permissions):
-    """The default matches the OpenHands image; another image needs its own."""
+def test_root_gets_only_the_capability_it_needs(manifests, permissions):
+    """CAP_DAC_OVERRIDE is not decorative.
+
+    The entrypoint is mode 770 owned by uid 42420. Dropping ALL capabilities
+    removes DAC_OVERRIDE, and without it root cannot execute a file it does not
+    own -- which is why `drop: [ALL]` on its own produced
+
+      exec: "/app/entrypoint.sh": permission denied
+
+    Nothing else is added back.
+    """
+    pod = _pod(manifests, permissions)
+    agent = next(c for c in pod.spec.containers if c.name == "openhands")
+    caps = agent.security_context.capabilities
+    assert caps.drop == ["ALL"]
+    assert caps.add == ["DAC_OVERRIDE"]
+
+
+def test_a_rootless_agent_image_can_be_selected_instead(manifests, permissions):
+    """A non-zero uid switches to the non-root posture with no extra caps."""
     pod = _pod(manifests, permissions, agent_uid=1001, agent_gid=1001)
     agent = next(c for c in pod.spec.containers if c.name == "openhands")
     assert agent.security_context.run_as_user == 1001
-    assert agent.security_context.run_as_group == 1001
+    assert agent.security_context.run_as_non_root is True
+    assert agent.security_context.capabilities.drop == ["ALL"]
+    assert not agent.security_context.capabilities.add
 
 
 def test_the_agent_container_is_not_granted_extra_privileges(manifests, permissions):
@@ -126,8 +143,11 @@ def test_the_agent_container_is_not_granted_extra_privileges(manifests, permissi
     pod = _pod(manifests, permissions)
     agent = next(c for c in pod.spec.containers if c.name == "openhands")
     assert agent.security_context.privileged is None
+    # Root in the container must not become root on the node.
     for volume in pod.spec.volumes:
         assert volume.host_path is None
+    assert pod.spec.host_pid is None
+    assert pod.spec.host_network is None
 
 
 def test_both_containers_mount_only_the_workspace(manifests, permissions):
