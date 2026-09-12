@@ -1,15 +1,37 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../api/client";
-import type { Agent, ProjectDetail } from "../types";
+import type { ProjectDetail } from "../types";
 import { StatusDot } from "./StatusDot";
 
 export function AgentPanel({ project }: { project: ProjectDetail }) {
   const queryClient = useQueryClient();
-  const [selected, setSelected] = useState<Agent | null>(project.agents[0] ?? null);
+  // Hold the id, not the row: the project query refreshes every few seconds, so
+  // the panel should render the server's view of the agent rather than a copy
+  // taken when it was first clicked.
+  const [selectedId, setSelectedId] = useState<string | null>(project.agents[0]?.id ?? null);
   const [draft, setDraft] = useState("");
   const [newAgent, setNewAgent] = useState("");
+  const [newModel, setNewModel] = useState("");
+  const [modelDraft, setModelDraft] = useState("");
+
+  const agents = project.agents;
+  const selected = agents.find((agent) => agent.id === selectedId) ?? agents[0] ?? null;
+
+  // An agent's model is a logical alias resolved by the LiteLLM gateway, so the
+  // suggestions come from the API rather than a list baked into the bundle.
+  const models = useQuery({
+    queryKey: ["models"],
+    queryFn: api.listModels,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  useEffect(() => {
+    setModelDraft(selected?.model ?? "");
+  }, [selected?.id, selected?.model]);
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["project", project.id] });
 
   const conversation = useQuery({
     queryKey: ["conversation", selected?.id],
@@ -18,12 +40,27 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
   });
 
   const addAgent = useMutation({
-    mutationFn: () => api.createAgent(project.id, { name: newAgent }),
+    mutationFn: () =>
+      api.createAgent(project.id, {
+        name: newAgent,
+        model: newModel.trim() || undefined,
+      }),
     onSuccess: (agent) => {
       setNewAgent("");
-      setSelected(agent);
-      queryClient.invalidateQueries({ queryKey: ["project", project.id] });
+      setNewModel("");
+      setSelectedId(agent.id);
+      refresh();
     },
+  });
+
+  const changeModel = useMutation({
+    mutationFn: (model: string) => api.updateAgent(selected!.id, { model }),
+    onSuccess: () => refresh(),
+  });
+
+  const restart = useMutation({
+    mutationFn: () => api.restartAgent(selected!.id),
+    onSuccess: () => refresh(),
   });
 
   const send = useMutation({
@@ -34,10 +71,17 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
     },
   });
 
-  const agents = project.agents;
+  const pendingModel = modelDraft.trim();
+  const modelChanged = Boolean(pendingModel) && pendingModel !== selected?.model;
 
   return (
     <div className="flex h-full">
+      <datalist id="model-aliases">
+        {(models.data?.models ?? []).map((alias) => (
+          <option key={alias} value={alias} />
+        ))}
+      </datalist>
+
       <div className="flex w-56 shrink-0 flex-col border-r border-surface-border">
         <div className="flex-1 overflow-y-auto p-2">
           {agents.length === 0 && (
@@ -46,7 +90,7 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
           {agents.map((agent) => (
             <button
               key={agent.id}
-              onClick={() => setSelected(agent)}
+              onClick={() => setSelectedId(agent.id)}
               className={
                 "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs " +
                 (agent.id === selected?.id
@@ -60,7 +104,7 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
           ))}
         </div>
         <form
-          className="border-t border-surface-border p-2"
+          className="space-y-1 border-t border-surface-border p-2"
           onSubmit={(event) => {
             event.preventDefault();
             if (newAgent.trim()) addAgent.mutate();
@@ -72,6 +116,14 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
             placeholder="+ agent name"
             className="w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-surface-border focus:ring-neutral-600"
           />
+          <input
+            value={newModel}
+            onChange={(e) => setNewModel(e.target.value)}
+            list="model-aliases"
+            placeholder={`model: ${models.data?.default ?? "default"}`}
+            title="Logical model alias, e.g. local-coder"
+            className="w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-surface-border focus:ring-neutral-600"
+          />
         </form>
       </div>
 
@@ -81,8 +133,43 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
             <header className="flex items-center gap-3 border-b border-surface-border px-4 py-2 text-xs text-neutral-400">
               <StatusDot status={selected.status} />
               <span className="font-medium text-neutral-200">{selected.name}</span>
-              <span className="text-neutral-600">model: {selected.model}</span>
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (modelChanged) changeModel.mutate(pendingModel);
+                }}
+              >
+                <label className="text-neutral-600" htmlFor="agent-model">
+                  model:
+                </label>
+                <input
+                  id="agent-model"
+                  list="model-aliases"
+                  value={modelDraft}
+                  onChange={(e) => setModelDraft(e.target.value)}
+                  title="Applies to the agent's next session — restart to pick it up now."
+                  className="w-36 rounded bg-neutral-900 px-1.5 py-0.5 text-neutral-200 outline-none ring-1 ring-surface-border focus:ring-neutral-600"
+                />
+                {modelChanged && (
+                  <button
+                    type="submit"
+                    disabled={changeModel.isPending}
+                    className="rounded border border-surface-border px-1.5 py-0.5 hover:bg-neutral-800 disabled:opacity-50"
+                  >
+                    {changeModel.isPending ? "saving…" : "save"}
+                  </button>
+                )}
+              </form>
               <span className="text-neutral-600">branch: {selected.branch}</span>
+              <button
+                onClick={() => restart.mutate()}
+                disabled={restart.isPending}
+                title="Start a new session, keeping the workspace"
+                className="rounded border border-surface-border px-2 py-0.5 hover:bg-neutral-800 disabled:opacity-50"
+              >
+                {restart.isPending ? "restarting…" : "restart"}
+              </button>
               <button
                 onClick={() => api.stopAgent(selected.id)}
                 className="ml-auto rounded border border-surface-border px-2 py-0.5 hover:bg-neutral-800"
@@ -90,6 +177,12 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
                 stop
               </button>
             </header>
+
+            {changeModel.isError && (
+              <p className="border-b border-surface-border px-4 py-1 text-xs text-red-400">
+                Could not change the model: {String(changeModel.error)}
+              </p>
+            )}
 
             <div className="flex-1 space-y-3 overflow-y-auto p-4 text-sm">
               {conversation.data?.messages.length === 0 && (

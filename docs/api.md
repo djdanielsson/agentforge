@@ -55,6 +55,17 @@ an instance with auth off.
 | GET | `/api/v1/health` | versioned; adds `environment` |
 | GET | `/api/v1/version` | `{"name":"agentforge","version":"0.1.0"}` |
 | GET | `/api/v1/providers` | configured provider and each provider's capabilities |
+| GET | `/api/v1/models` | model aliases an agent can run on, and the default for a new agent |
+
+`GET /api/v1/models` asks the LiteLLM gateway (`/v1/models`) what aliases it
+serves and reports `"source": "gateway"`. When the gateway does not answer — a
+deployment that has not stood one up yet — it falls back to
+`AGENTFORGE_AGENT_MODEL_ALIASES` and reports `"source": "config"`, so the
+dashboard's model picker always has something to offer:
+
+```json
+{"models": ["local-coder", "fast", "smart"], "source": "config", "default": "local-coder"}
+```
 
 `GET /api/v1/providers` advertises what each backend can honour, so a client can
 disable a control a provider cannot implement:

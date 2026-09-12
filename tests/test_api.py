@@ -71,6 +71,56 @@ def test_agent_creation_binds_branch_and_model(client):
     assert len(agents) == 1
 
 
+def test_agent_model_can_be_changed_after_creation(client):
+    """The dashboard needs a way to point an existing agent at another alias."""
+    project = make_project(client, "ModelSwitch")
+    agent = client.post(f"{API}/projects/{project['id']}/agents", json={"name": "Builder"}).json()
+    assert agent["model"] == "local-coder"
+
+    resp = client.patch(f"{API}/agents/{agent['id']}", json={"model": "smart"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"] == "smart"
+
+    # And it sticks: the detail read is not a stale row.
+    assert client.get(f"{API}/agents/{agent['id']}").json()["model"] == "smart"
+
+
+class _FakeGatewayResponse:
+    """Just enough of an httpx.Response for the model-list probe."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+def test_model_aliases_fall_back_to_config_without_a_gateway(client):
+    """No LiteLLM in this deployment: the picker still offers something."""
+    body = client.get(f"{API}/models").json()
+
+    assert body["source"] == "config"
+    assert body["models"] == ["local-coder", "fast", "smart"]
+    assert body["default"] in body["models"]
+
+
+def test_model_aliases_come_from_the_gateway_when_it_answers(client, monkeypatch):
+    """The gateway decides what aliases exist; settings are only a fallback."""
+    from agentforge_api.routers import models as models_router
+
+    payload = {"data": [{"id": "smart"}, {"id": "local-coder"}]}
+    monkeypatch.setattr(
+        models_router.httpx, "get", lambda url, timeout: _FakeGatewayResponse(payload)
+    )
+
+    body = client.get(f"{API}/models").json()
+    assert body["source"] == "gateway"
+    assert body["models"] == ["smart", "local-coder"]
+
+
 def test_task_lifecycle_queues_work(client):
     project = make_project(client, "TaskFlow")
     agent = client.post(f"{API}/projects/{project['id']}/agents", json={"name": "Builder"}).json()

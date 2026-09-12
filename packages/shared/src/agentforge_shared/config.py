@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     agent_server_api_key: str | None = None
     llm_gateway_url: str = "http://litellm:4000"
     default_agent_model: str = "local-coder"
+    #: Comma-separated fallback for the model picker. The gateway is
+    #: authoritative whenever it answers; this only covers a deployment that has
+    #: not stood one up, and should mirror `deploy/litellm/config.yaml`.
+    agent_model_aliases: str = "local-coder,fast,smart"
 
     # --- auth ---
     #: Dev convenience: with auth off, the API is open and the CLI needs no key.
@@ -85,6 +89,11 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def model_aliases(self) -> list[str]:
+        """`agent_model_aliases` as a list, blanks dropped."""
+        return [alias.strip() for alias in self.agent_model_aliases.split(",") if alias.strip()]
 
 
 @lru_cache

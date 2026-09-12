@@ -45,7 +45,15 @@ export const api = {
       body: JSON.stringify(body),
     }),
   listAgents: (projectId: string) => request<Agent[]>(`/projects/${projectId}/agents`),
+  updateAgent: (agentId: string, body: { name?: string; model?: string; branch?: string }) =>
+    request<Agent>(`/agents/${agentId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  restartAgent: (agentId: string) => request<Agent>(`/agents/${agentId}/restart`, { method: "POST" }),
   stopAgent: (agentId: string) => request<Agent>(`/agents/${agentId}/stop`, { method: "POST" }),
+
+  // Aliases an agent can run on. The gateway owns the list; the API falls back
+  // to the aliases this deployment was configured with when it is not up.
+  listModels: () =>
+    request<{ models: string[]; source: "gateway" | "config"; default: string }>("/models"),
   sendMessage: (agentId: string, content: string) =>
     request<Agent>(`/agents/${agentId}/messages`, {
       method: "POST",
