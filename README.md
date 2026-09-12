@@ -1,4 +1,4 @@
-# AI Workbench
+# AgentForge
 
 A self-hosted **AI engineering control plane**: create projects, spin up isolated
 Kubernetes workspaces, and run multiple autonomous coding agents against them —
@@ -13,7 +13,7 @@ Existing tools give you an agent (OpenHands, Codex, Claude Code) or an editor
 (code-server, Cursor). Neither gives you a **control plane** for running many
 agents across many projects and supervising them.
 
-AI Workbench builds the part that doesn't exist: projects, agents, tasks,
+AgentForge builds the part that doesn't exist: projects, agents, tasks,
 workspaces, approvals and git — as first-class objects.
 
 ## Architecture
@@ -60,7 +60,7 @@ workspaces, approvals and git — as first-class objects.
 ## Layout
 
 ```
-ai-workbench/
+agentforge/
 ├── api/                  FastAPI — the control-plane HTTP + WebSocket surface
 ├── orchestrator/         Task queue, agent lifecycle, git management
 ├── workspace-controller/ k8s provisioning of per-project workspaces

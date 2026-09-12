@@ -7,12 +7,8 @@ on:
 
 jobs:
   python:
-    name: Python (${{ matrix.package }})
+    name: Lint & tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        package: [aiw-shared, aiw-api, aiw-orchestrator, aiw-workspace-controller]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -24,33 +20,25 @@ jobs:
         run: uv run ruff check .
       - name: Format check
         run: uv run ruff format --check .
-      - name: Import check
-        run: uv run python -c "import ${{ matrix.package == 'aiw-shared' && 'aiw_shared' || matrix.package == 'aiw-api' && 'aiw_api' || matrix.package == 'aiw-orchestrator' && 'aiw_orchestrator' || 'aiw_workspace' }}"
+      - name: Tests
+        run: uv run pytest -q
+      - name: Import smoke test
+        run: |
+          uv run python -c "import agentforge_shared, agentforge_api, agentforge_orchestrator, agentforge_workspaces, agentforge_cli; print('imports ok')"
 
-  test:
-    name: Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync --all-packages
-      - run: uv run pytest -q
-
-  frontend:
-    name: Frontend
+  web:
+    name: Web
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontend
+        working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build

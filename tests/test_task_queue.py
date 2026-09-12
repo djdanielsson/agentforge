@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 
 def _seed_task(status: str, *, attempts: int = 0, leased_until=None):
-    from aiw_shared.db import session_scope
-    from aiw_shared.models import Agent, Project, Task
+    from agentforge_shared.db import session_scope
+    from agentforge_shared.models import Agent, Project, Task
 
     with session_scope() as session:
         project = Project(name="Q", slug=f"q-{datetime.now(UTC).timestamp()}", status="ready")
@@ -30,7 +30,7 @@ def _seed_task(status: str, *, attempts: int = 0, leased_until=None):
 
 
 def test_lease_claims_the_oldest_task(client):
-    from aiw_orchestrator.task_queue import TaskQueue
+    from agentforge_orchestrator.task_queue import TaskQueue
 
     task_id, _ = _seed_task("queued")
     queue = TaskQueue("test-worker")
@@ -45,7 +45,7 @@ def test_lease_claims_the_oldest_task(client):
 
 
 def test_complete_clears_the_lease(client):
-    from aiw_orchestrator.task_queue import TaskQueue
+    from agentforge_orchestrator.task_queue import TaskQueue
 
     task_id, _ = _seed_task("queued")
     queue = TaskQueue("test-worker")
@@ -61,7 +61,7 @@ def test_complete_clears_the_lease(client):
 
 
 def test_expired_lease_is_requeued(client):
-    from aiw_orchestrator.task_queue import TaskQueue
+    from agentforge_orchestrator.task_queue import TaskQueue
 
     stale = datetime.now(UTC) - timedelta(seconds=10)
     task_id, _ = _seed_task("leased", attempts=1, leased_until=stale)
@@ -72,7 +72,7 @@ def test_expired_lease_is_requeued(client):
 
 
 def test_expired_lease_past_max_attempts_fails(client):
-    from aiw_orchestrator.task_queue import TaskQueue
+    from agentforge_orchestrator.task_queue import TaskQueue
 
     stale = datetime.now(UTC) - timedelta(seconds=10)
     task_id, _ = _seed_task("leased", attempts=99, leased_until=stale)
@@ -85,7 +85,7 @@ def test_expired_lease_past_max_attempts_fails(client):
 
 
 def test_fail_records_the_error(client):
-    from aiw_orchestrator.task_queue import TaskQueue
+    from agentforge_orchestrator.task_queue import TaskQueue
 
     task_id, _ = _seed_task("queued")
     queue = TaskQueue("test-worker")

@@ -4,7 +4,7 @@
 
 We deliberately **do not** rebuild the hard parts. OpenHands is the agent brain,
 Dev Containers describe environments, code-server is the editor, LiteLLM routes
-models. AI Workbench is the layer that connects them and makes many agents
+models. AgentForge is the layer that connects them and makes many agents
 supervisable.
 
 ## Services
@@ -66,7 +66,7 @@ Non-negotiables for isolation:
 We start with a plain Go-less controller (Python + `kubernetes` client). A CRD
 + operator is a later refinement, not MVP.
 
-### `frontend/` — dashboard
+### `apps/web/` — dashboard
 
 React + TypeScript + Tailwind. MVP #1 shells code-server in an iframe and shows
 the agent chat beside it. Monaco replaces the iframe from MVP #3.

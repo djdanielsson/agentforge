@@ -4,15 +4,16 @@ requires-python = ">=3.11"
 
 [manifest]
 members = [
-    "ai-workbench",
-    "aiw-api",
-    "aiw-orchestrator",
-    "aiw-shared",
-    "aiw-workspace-controller",
+    "agentforge",
+    "agentforge-api",
+    "agentforge-cli",
+    "agentforge-orchestrator",
+    "agentforge-shared",
+    "agentforge-workspaces",
 ]
 
 [[package]]
-name = "ai-workbench"
+name = "agentforge"
 version = "0.1.0"
 source = { virtual = "." }
 
@@ -32,6 +33,99 @@ dev = [
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.6" },
+]
+
+[[package]]
+name = "agentforge-api"
+version = "0.1.0"
+source = { editable = "apps/api" }
+dependencies = [
+    { name = "agentforge-shared" },
+    { name = "agentforge-workspaces" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sqlalchemy" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentforge-shared", editable = "packages/shared" },
+    { name = "agentforge-workspaces", editable = "packages/workspaces" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "sqlalchemy", specifier = ">=2.0.30" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
+
+[[package]]
+name = "agentforge-cli"
+version = "0.1.0"
+source = { editable = "apps/cli" }
+dependencies = [
+    { name = "httpx" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "websockets", specifier = ">=12.0" },
+]
+
+[[package]]
+name = "agentforge-orchestrator"
+version = "0.1.0"
+source = { editable = "apps/orchestrator" }
+dependencies = [
+    { name = "agentforge-shared" },
+    { name = "agentforge-workspaces" },
+    { name = "httpx" },
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentforge-shared", editable = "packages/shared" },
+    { name = "agentforge-workspaces", editable = "packages/workspaces" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "sqlalchemy", specifier = ">=2.0.30" },
+]
+
+[[package]]
+name = "agentforge-shared"
+version = "0.1.0"
+source = { editable = "packages/shared" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-settings", specifier = ">=2.3" },
+    { name = "sqlalchemy", specifier = ">=2.0.30" },
+]
+
+[[package]]
+name = "agentforge-workspaces"
+version = "0.1.0"
+source = { editable = "packages/workspaces" }
+dependencies = [
+    { name = "agentforge-shared" },
+    { name = "kubernetes" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentforge-shared", editable = "packages/shared" },
+    { name = "kubernetes", specifier = ">=29.0" },
+    { name = "pydantic", specifier = ">=2.7" },
 ]
 
 [[package]]
@@ -172,82 +266,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl", hash = "sha256:053243f8b92b990551949e63930a839ff0cf0b0ebbe0597b0f3fb19e1a0fe82e", size = 7490, upload-time = "2025-07-03T22:54:42.156Z" },
-]
-
-[[package]]
-name = "aiw-api"
-version = "0.1.0"
-source = { editable = "api" }
-dependencies = [
-    { name = "aiw-shared" },
-    { name = "aiw-workspace-controller" },
-    { name = "fastapi" },
-    { name = "pydantic" },
-    { name = "sqlalchemy" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiw-shared", editable = "shared" },
-    { name = "aiw-workspace-controller", editable = "workspace-controller" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "sqlalchemy", specifier = ">=2.0.30" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
-]
-
-[[package]]
-name = "aiw-orchestrator"
-version = "0.1.0"
-source = { editable = "orchestrator" }
-dependencies = [
-    { name = "aiw-shared" },
-    { name = "aiw-workspace-controller" },
-    { name = "httpx" },
-    { name = "sqlalchemy" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiw-shared", editable = "shared" },
-    { name = "aiw-workspace-controller", editable = "workspace-controller" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "sqlalchemy", specifier = ">=2.0.30" },
-]
-
-[[package]]
-name = "aiw-shared"
-version = "0.1.0"
-source = { editable = "shared" }
-dependencies = [
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "sqlalchemy" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pydantic-settings", specifier = ">=2.3" },
-    { name = "sqlalchemy", specifier = ">=2.0.30" },
-]
-
-[[package]]
-name = "aiw-workspace-controller"
-version = "0.1.0"
-source = { editable = "workspace-controller" }
-dependencies = [
-    { name = "aiw-shared" },
-    { name = "kubernetes" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiw-shared", editable = "shared" },
-    { name = "kubernetes", specifier = ">=29.0" },
-    { name = "pydantic", specifier = ">=2.7" },
 ]
 
 [[package]]

@@ -1,19 +1,19 @@
-# Development stack for AI Workbench.
+# Development stack for AgentForge.
 # The control plane runs on the host for fast iteration; this brings up its
 # dependencies (Postgres, and optionally the LLM gateway).
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: aiw
-      POSTGRES_PASSWORD: aiw
-      POSTGRES_DB: aiw
+      POSTGRES_USER: agentforge
+      POSTGRES_PASSWORD: agentforge
+      POSTGRES_DB: agentforge
     ports:
       - "5432:5432"
     volumes:
-      - aiw-pgdata:/var/lib/postgresql/data
+      - agentforge-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aiw"]
+      test: ["CMD-SHELL", "pg_isready -U agentforge"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -28,4 +28,4 @@ services:
       - ./deploy/litellm/config.yaml:/app/config.yaml:ro
 
 volumes:
-  aiw-pgdata:
+  agentforge-pgdata:

@@ -8,7 +8,7 @@
 | `api/` | FastAPI control plane. Desired state in, events out. No provisioning. |
 | `orchestrator/` | the reconcile loop. Turns DB rows into k8s objects and agent turns. |
 | `workspace-controller/` | the only code that talks to the Kubernetes API |
-| `frontend/` | React dashboard |
+| `apps/web/` | React dashboard |
 | `docs/` | architecture and roadmap |
 
 ## Rules that keep this maintainable
@@ -29,7 +29,7 @@ make install     # uv sync --all-packages
 make api         # :8000
 make test        # pytest
 make lint        # ruff
-cd frontend && npm install && npm run dev
+cd apps/web && npm install && npm run dev
 ```
 
 ## Commits

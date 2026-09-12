@@ -8,17 +8,17 @@ import pytest
 @pytest.fixture()
 def manifests():
     pytest.importorskip("kubernetes")
-    from aiw_workspace import manifests as m
+    from agentforge_workspaces import manifests as m
 
     return m
 
 
 def test_pod_never_mounts_a_host_path_and_has_no_api_token(manifests):
     pod = manifests.build_pod(
-        "aiw-demo-ws",
-        "aiw-demo",
+        "af-demo-ws",
+        "af-demo",
         image="codercom/code-server:latest",
-        pvc_name="aiw-demo-workspace",
+        pvc_name="af-demo-workspace",
         git_repository="https://github.com/example/demo",
         git_revision="main",
     )
@@ -36,10 +36,10 @@ def test_pod_never_mounts_a_host_path_and_has_no_api_token(manifests):
 
 def test_git_bootstrap_runs_as_the_workspace_uid(manifests):
     pod = manifests.build_pod(
-        "aiw-demo-ws",
-        "aiw-demo",
+        "af-demo-ws",
+        "af-demo",
         image="codercom/code-server:latest",
-        pvc_name="aiw-demo-workspace",
+        pvc_name="af-demo-workspace",
         git_repository="https://github.com/example/demo",
     )
     clone = next(c for c in pod.spec.init_containers if c.name == "git-clone")
@@ -48,12 +48,12 @@ def test_git_bootstrap_runs_as_the_workspace_uid(manifests):
 
 
 def test_no_init_container_without_a_repository(manifests):
-    pod = manifests.build_pod("aiw-x-ws", "aiw-x", image="img", pvc_name="aiw-x-workspace")
+    pod = manifests.build_pod("af-x-ws", "af-x", image="img", pvc_name="af-x-workspace")
     assert not pod.spec.init_containers
 
 
 def test_pvc_requests_the_configured_storage(manifests):
-    pvc = manifests.build_pvc("aiw-x-workspace", "aiw-x", "10Gi", "local-path")
+    pvc = manifests.build_pvc("af-x-workspace", "af-x", "10Gi", "local-path")
     assert pvc.spec.resources.requests == {"storage": "10Gi"}
     assert pvc.spec.storage_class_name == "local-path"
     assert pvc.spec.access_modes == ["ReadWriteOnce"]

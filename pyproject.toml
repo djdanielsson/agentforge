@@ -1,11 +1,11 @@
 [project]
-name = "ai-workbench"
+name = "agentforge"
 version = "0.1.0"
 description = "Self-hosted AI engineering control plane"
 requires-python = ">=3.11"
 
 [tool.uv.workspace]
-members = ["shared", "api", "orchestrator", "workspace-controller"]
+members = ["packages/shared", "packages/workspaces", "apps/api", "apps/orchestrator", "apps/cli"]
 
 [dependency-groups]
 dev = [
@@ -24,4 +24,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["shared/src", "api/src", "orchestrator/src", "workspace-controller/src"]
+pythonpath = ["packages/shared/src", "apps/api/src", "apps/orchestrator/src", "packages/workspaces/src", "apps/cli/src"]

@@ -1,4 +1,4 @@
-.PHONY: help install api orchestrator controller frontend test lint fmt clean
+.PHONY: help install api orchestrator cli workspaces web test lint fmt clean
 
 UV ?= uv
 PY ?= python3
@@ -10,16 +10,19 @@ install:  ## Install all Python workspace members
 	$(UV) sync --all-packages
 
 api:  ## Run the control-plane API on :8000
-	$(UV) run --package aiw-api uvicorn aiw_api.main:app --reload --port 8000
+	$(UV) run --package agentforge-api uvicorn agentforge_api.main:app --reload --port 8000
 
 orchestrator:  ## Run the orchestrator worker loop
-	$(UV) run --package aiw-orchestrator python -m aiw_orchestrator.main
+	$(UV) run --package agentforge-orchestrator python -m agentforge_orchestrator.main
 
-controller:  ## Run the workspace controller CLI (provision a workspace)
-	$(UV) run --package aiw-workspace-controller python -m aiw_workspace.cli --help
+cli:  ## Run the CLI (pass ARGS="fleet")
+	$(UV) run --package agentforge-cli agentforge $(ARGS)
 
-frontend:  ## Run the Vite dev server
-	cd frontend && npm install && npm run dev
+workspaces:  ## Workspace provider CLI (provision/status/exec/teardown)
+	$(UV) run --package agentforge-workspaces python -m agentforge_workspaces.cli --help
+
+web:  ## Run the Vite dev server
+	cd apps/web && npm install && npm run dev
 
 test:  ## Run the test suite
 	$(UV) run pytest -q
@@ -31,4 +34,4 @@ fmt:  ## Ruff format
 	$(UV) run ruff format .
 
 clean:  ## Remove caches and local DB
-	rm -rf .pytest_cache .ruff_cache **/__pycache__ aiw.db
+	rm -rf .pytest_cache .ruff_cache **/__pycache__ agentforge.db
