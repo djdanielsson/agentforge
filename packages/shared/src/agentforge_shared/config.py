@@ -25,7 +25,11 @@ class Settings(BaseSettings):
 
     # --- api ---
     api_host: str = "0.0.0.0"
-    api_port: int = 8000
+    # Deliberately not called `api_port`: Kubernetes injects
+    # `<SERVICE_NAME>_PORT` for every Service, so a Service named
+    # `agentforge-api` sets AGENTFORGE_API_PORT to a value like
+    # "tcp://10.43.x.y:8000" and pydantic would refuse to parse it.
+    http_port: int = 8000
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
     # --- workspaces ---

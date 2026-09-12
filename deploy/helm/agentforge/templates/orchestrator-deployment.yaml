@@ -45,6 +45,9 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # Kubernetes injects <SERVICE_NAME>_PORT for every Service in the
+      # namespace, which collides with our own AGENTFORGE_* config namespace.
+      enableServiceLinks: false
       containers:
         - name: orchestrator
           image: "{{ .Values.orchestrator.image.repository }}:{{ .Values.orchestrator.image.tag | default .Chart.AppVersion }}"
