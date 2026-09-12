@@ -32,7 +32,7 @@ def _pod(manifests, permissions, **overrides):
         agent_image="ghcr.io/all-hands-ai/openhands:latest",
         pvc_name="af-demo-workspace",
         permissions=permissions,
-    )
+    )  # agent_uid/agent_gid default to the OpenHands image's user
     kwargs.update(overrides)
     return manifests.build_pod(**kwargs)
 
@@ -96,21 +96,29 @@ def test_code_server_runs_as_an_explicit_non_root_uid(manifests, permissions):
     assert code_server.security_context.run_as_non_root is True
 
 
-def test_the_agent_runtime_keeps_its_own_image_user(manifests, permissions):
-    """The OpenHands image's entrypoint is root-owned and not world-executable.
+def test_the_agent_runtime_runs_as_the_uid_that_owns_its_image_files(manifests, permissions):
+    """Not root, and not an arbitrary uid either.
 
-    Pinning it to uid 1000 fails at container init with
-    `exec: "/app/entrypoint.sh": permission denied`, which is how this was
-    found. What isolates a workspace is the pod boundary, not the in-container
-    uid, so this container runs as whatever user its image declares -- with
-    every capability dropped and escalation disabled.
+    The OpenHands entrypoint is mode 770 owned by uid 42420. Dropping ALL
+    capabilities removes CAP_DAC_OVERRIDE, so root cannot execute a file it
+    does not own -- uid 0 fails with EACCES exactly like uid 1000 does. This
+    was found by deploying: both attempts produced
+
+      exec: "/app/entrypoint.sh": permission denied
     """
     pod = _pod(manifests, permissions)
     agent = next(c for c in pod.spec.containers if c.name == "openhands")
-    assert agent.security_context.run_as_user is None
-    assert agent.security_context.run_as_non_root is None
-    assert agent.security_context.allow_privilege_escalation is False
-    assert agent.security_context.capabilities.drop == ["ALL"]
+    assert agent.security_context.run_as_user == 42420
+    assert agent.security_context.run_as_group == 42420
+    assert agent.security_context.run_as_non_root is True
+
+
+def test_the_agent_uid_is_configurable_for_a_different_image(manifests, permissions):
+    """The default matches the OpenHands image; another image needs its own."""
+    pod = _pod(manifests, permissions, agent_uid=1001, agent_gid=1001)
+    agent = next(c for c in pod.spec.containers if c.name == "openhands")
+    assert agent.security_context.run_as_user == 1001
+    assert agent.security_context.run_as_group == 1001
 
 
 def test_the_agent_container_is_not_granted_extra_privileges(manifests, permissions):

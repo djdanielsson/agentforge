@@ -135,6 +135,8 @@ class KubernetesProvider(WorkspaceProvider):
             environment=spec.environment,
             code_server_port=spec.code_server_port,
             agent_server_port=spec.agent_server_port,
+            agent_uid=spec.agent_uid,
+            agent_gid=spec.agent_gid,
             cpu_request=spec.cpu_request,
             memory_request=spec.memory_request,
             cpu_limit=spec.cpu_limit,

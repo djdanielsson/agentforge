@@ -88,6 +88,8 @@ class WorkspaceManager:
             storage=self.settings.workspace_storage,
             storage_class=self.settings.workspace_storage_class,
             code_server_port=self.settings.workspace_code_server_port,
+            agent_uid=self.settings.workspace_agent_uid,
+            agent_gid=self.settings.workspace_agent_gid,
             permissions=permissions,
             secrets=secrets,
             environment={

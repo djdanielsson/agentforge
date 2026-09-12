@@ -89,8 +89,12 @@ def test_workspace_state_carries_the_object_names_it_created():
     state = WorkspaceState(reference="af-x", provider="kubernetes", status="ready")
     assert state.pod_name is None
     state = WorkspaceState(
-        reference="af-x", provider="kubernetes", status="ready",
-        pvc_name="af-x-workspace", pod_name="af-x-ws", service_name="af-x-ws",
+        reference="af-x",
+        provider="kubernetes",
+        status="ready",
+        pvc_name="af-x-workspace",
+        pod_name="af-x-ws",
+        service_name="af-x-ws",
     )
     assert state.pod_name == "af-x-ws"
 

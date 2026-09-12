@@ -282,7 +282,13 @@ config:
   workspaceProvider: kubernetes
   workspaceImage: ghcr.io/coder/code-server:latest
   # Agent runtime container that runs alongside code-server in the workspace.
-  workspaceAgentImage: ghcr.io/all-hands-ai/openhands:latest
+  workspaceAgentImage: "ghcr.io/all-hands-ai/openhands:latest"
+  # Must be the uid the agent image's files are owned by. Its entrypoint is
+  # mode 770 owned by that user, and dropping ALL capabilities removes
+  # CAP_DAC_OVERRIDE, so no other uid (including root) can execute it.
+  # 42420 is the `openhands` user in the OpenHands image.
+  workspaceAgentUid: 42420
+  workspaceAgentGid: 42420
   workspaceCpuRequest: 500m
   workspaceMemoryRequest: 1Gi
   workspaceStorage: 10Gi

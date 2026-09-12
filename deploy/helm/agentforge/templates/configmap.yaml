@@ -33,6 +33,8 @@ data:
   AGENTFORGE_WORKSPACE_PROVIDER: {{ .Values.config.workspaceProvider | quote }}
   AGENTFORGE_WORKSPACE_IMAGE: {{ .Values.config.workspaceImage | quote }}
   AGENTFORGE_WORKSPACE_AGENT_IMAGE: {{ .Values.config.workspaceAgentImage | quote }}
+  AGENTFORGE_WORKSPACE_AGENT_UID: {{ .Values.config.workspaceAgentUid | quote }}
+  AGENTFORGE_WORKSPACE_AGENT_GID: {{ .Values.config.workspaceAgentGid | quote }}
   AGENTFORGE_WORKSPACE_CPU_REQUEST: {{ .Values.config.workspaceCpuRequest | quote }}
   AGENTFORGE_WORKSPACE_MEMORY_REQUEST: {{ .Values.config.workspaceMemoryRequest | quote }}
   AGENTFORGE_WORKSPACE_STORAGE: {{ .Values.config.workspaceStorage | quote }}

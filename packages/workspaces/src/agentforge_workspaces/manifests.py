@@ -17,6 +17,9 @@ from kubernetes import client
 
 MANAGED_BY = "agentforge"
 WORKSPACE_MOUNT = "/workspace"
+#: code-server's image ships a `coder` user at 1000.
+CODE_SERVER_UID = 1000
+CODE_SERVER_GID = 1000
 LABELS = {
     "app.kubernetes.io/managed-by": MANAGED_BY,
     "app.kubernetes.io/part-of": "agentforge",
@@ -99,6 +102,8 @@ def build_pod(
     environment: dict[str, str] | None = None,
     code_server_port: int = 8080,
     agent_server_port: int = 3000,
+    agent_uid: int = 42420,
+    agent_gid: int = 42420,
     cpu_request: str = "500m",
     memory_request: str = "1Gi",
     cpu_limit: str = "2",
@@ -125,28 +130,22 @@ def build_pod(
     if not permissions.filesystem.workspace:
         raise ValueError("filesystem.workspace must be true; the agent needs somewhere to work")
 
-    # Two different security contexts, for one honest reason.
+    # Both containers run as explicit non-root uids, but they are different
+    # uids, and getting the agent one wrong is not obvious.
     #
-    # code-server runs as an explicit non-root uid. The agent runtime cannot:
-    # the OpenHands image's entrypoint is root-owned and not world-executable,
-    # so pinning it to uid 1000 fails at container init with
-    #   exec: "/app/entrypoint.sh": permission denied
-    #
-    # What actually isolates a workspace is the pod boundary, and that is
-    # unchanged: no host mounts, no service account token, all capabilities
-    # dropped, privilege escalation disabled, a NetworkPolicy for egress, and
-    # its own namespace. Root inside such a container is root in a disposable
-    # filesystem, not on the node. Pinning the uid was never load-bearing.
-    def _runtime_security_context(*, non_root: bool) -> client.V1SecurityContext:
-        context = client.V1SecurityContext(
+    # The agent runtime image's entrypoint is mode 770 owned by its own user
+    # (42420 in the OpenHands image). Dropping ALL capabilities removes
+    # CAP_DAC_OVERRIDE, so root cannot execute a file it does not own either --
+    # uid 0 fails with EACCES just like any other unprivileged user, and so does
+    # uid 1000. The container has to run as the uid that owns the image's files.
+    def _runtime_security_context(uid: int, gid: int) -> client.V1SecurityContext:
+        return client.V1SecurityContext(
+            run_as_user=uid,
+            run_as_group=gid,
+            run_as_non_root=True,
             allow_privilege_escalation=False,
             capabilities=client.V1Capabilities(drop=["ALL"]),
         )
-        if non_root:
-            context.run_as_user = 1000
-            context.run_as_group = 1000
-            context.run_as_non_root = True
-        return context
 
     warnings: list[str] = []
     env = [
@@ -209,7 +208,7 @@ def build_pod(
             requests={"cpu": cpu_request, "memory": memory_request},
             limits={"cpu": cpu_limit, "memory": memory_limit},
         ),
-        security_context=_runtime_security_context(non_root=True),
+        security_context=_runtime_security_context(CODE_SERVER_UID, CODE_SERVER_GID),
         readiness_probe=client.V1Probe(
             http_get=client.V1HTTPGetAction(path="/healthz", port=code_server_port),
             initial_delay_seconds=5,
@@ -227,8 +226,7 @@ def build_pod(
             requests={"cpu": cpu_request, "memory": memory_request},
             limits={"cpu": cpu_limit, "memory": memory_limit},
         ),
-        # non_root=False: see the note above. The image decides its own user.
-        security_context=_runtime_security_context(non_root=False),
+        security_context=_runtime_security_context(agent_uid, agent_gid),
         readiness_probe=client.V1Probe(
             http_get=client.V1HTTPGetAction(path="/health", port=agent_server_port),
             initial_delay_seconds=10,

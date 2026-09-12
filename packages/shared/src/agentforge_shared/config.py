@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     workspace_namespace_prefix: str = "af"
     workspace_image: str = "ghcr.io/coder/code-server:latest"
     workspace_agent_image: str = "ghcr.io/all-hands-ai/openhands:latest"
+    #: The uid/gid the agent runtime image expects. Defaults match the
+    #: OpenHands image's `openhands` user. It must be the image's own user:
+    #: the entrypoint is mode 770 owned by it, so neither uid 0 (without
+    #: CAP_DAC_OVERRIDE) nor any other uid can execute it.
+    workspace_agent_uid: int = 42420
+    workspace_agent_gid: int = 42420
     workspace_cpu_request: str = "500m"
     workspace_memory_request: str = "1Gi"
     workspace_storage: str = "10Gi"
