@@ -113,3 +113,24 @@ export interface GitDiff {
   diff: string;
   files: GitFileChange[];
 }
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: "dir" | "file" | "symlink" | "other";
+  size: number;
+}
+
+export interface FileListing {
+  path: string;
+  root: string;
+  entries: FileEntry[];
+}
+
+export interface FileContent {
+  path: string;
+  size: number;
+  /** "base64" means the file is not text; the editor refuses to render it. */
+  encoding: "utf8" | "base64";
+  content: string;
+}

@@ -3,6 +3,8 @@
 import type {
   Agent,
   Event,
+  FileContent,
+  FileListing,
   GitDiff,
   Project,
   ProjectDetail,
@@ -79,6 +81,22 @@ export const api = {
     request<Task>(`/tasks/${taskId}/cancel`, { method: "POST" }),
   taskEvents: (taskId: string) =>
     request<{ task_id: string; events: Event[] }>(`/tasks/${taskId}/events`),
+
+  // The workspace pod is not reachable from the browser, so the editor and the
+  // terminal both go through the API.
+  listFiles: (projectId: string, path: string) =>
+    request<FileListing>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),
+  readFile: (projectId: string, path: string) =>
+    request<FileContent>(`/projects/${projectId}/file?path=${encodeURIComponent(path)}`),
+  writeFile: (projectId: string, path: string, content: string) =>
+    request<{ path: string; size: number }>(`/projects/${projectId}/file`, {
+      method: "PUT",
+      body: JSON.stringify({ path, content }),
+    }),
+  terminalUrl: (projectId: string) => {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${location.host}${BASE}/projects/${projectId}/terminal`;
+  },
 
   gitDiff: (projectId: string) => request<GitDiff>(`/projects/${projectId}/git/diff`),
   gitStatus: (projectId: string) =>
