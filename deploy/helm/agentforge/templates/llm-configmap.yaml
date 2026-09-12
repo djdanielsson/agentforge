@@ -1,0 +1,38 @@
+{{- if .Values.llm.enabled -}}
+{{/*
+The alias table. An agent stores only `model: <alias>`, so this is the single
+place a deployment decides what that alias means: an OpenAI-compatible endpoint
+on the LAN, or a hosted provider. Keys are never here — `api_key_env` names the
+environment variable the Secret provides.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentforge.fullname" . }}-llm
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    model_list:
+      {{- range .Values.llm.models }}
+      - model_name: {{ .name }}
+        litellm_params:
+          model: {{ .model }}
+          {{- with .api_base }}
+          api_base: {{ . }}
+          {{- end }}
+          {{- with .api_key_env }}
+          api_key: os.environ/{{ . }}
+          {{- end }}
+          {{- with .api_key }}
+          api_key: {{ . | quote }}
+          {{- end }}
+      {{- end }}
+
+    litellm_settings:
+      drop_params: true
+
+    general_settings:
+      # Agents authenticate with this; it is also what the dashboard sends.
+      master_key: os.environ/LITELLM_MASTER_KEY
+{{- end }}

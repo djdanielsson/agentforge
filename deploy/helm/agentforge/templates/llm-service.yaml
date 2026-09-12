@@ -1,0 +1,17 @@
+{{- if .Values.llm.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentforge.fullname" . }}-llm
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm
+spec:
+  selector:
+    {{- include "agentforge.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: llm
+  ports:
+    - name: http
+      port: {{ .Values.llm.port }}
+      targetPort: http
+{{- end }}

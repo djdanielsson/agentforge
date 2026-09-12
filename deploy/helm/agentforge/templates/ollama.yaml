@@ -1,0 +1,92 @@
+{{- if and .Values.llm.enabled .Values.llm.ollama.enabled -}}
+{{/*
+A bundled model server for the local alias. CPU-only hosts are fine for the
+smaller coder models; point `llm.models[].api_base` at another host instead if
+the model already lives elsewhere on the LAN.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentforge.fullname" . }}-ollama
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "agentforge.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ollama
+  template:
+    metadata:
+      labels:
+        {{- include "agentforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: "{{ .Values.llm.ollama.image.repository }}:{{ .Values.llm.ollama.image.tag }}"
+          imagePullPolicy: {{ .Values.llm.ollama.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 11434
+          env:
+            # Keep the model in the mounted volume rather than the container.
+            - name: OLLAMA_MODELS
+              value: /models
+          resources:
+            {{- toYaml .Values.llm.ollama.resources | nindent 12 }}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ include "agentforge.fullname" . }}-ollama
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentforge.fullname" . }}-ollama
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  selector:
+    {{- include "agentforge.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agentforge.fullname" . }}-ollama
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.llm.ollama.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.llm.ollama.storage }}
+{{- end }}

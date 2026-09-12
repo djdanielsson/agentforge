@@ -145,7 +145,7 @@ projects will use and replace this with a Role per namespace.
 | `config.workspaceStorage` | `10Gi` | Per-project PVC. |
 | `config.workspaceStorageClass` | `""` | Empty means the cluster default. |
 | `config.openhandsUrl` | `http://openhands.agentforge.svc.cluster.local:3000` | |
-| `config.llmGatewayUrl` | `http://litellm.agentforge.svc.cluster.local:4000` | |
+| `config.llmGatewayUrl` | `http://agentforge-llm:4000` | Service this chart ships when `llm.enabled`; point it elsewhere for an external gateway. |
 | `config.defaultAgentModel` | `local-coder` | |
 
 ### Replicas, resources, probes, ingress
@@ -163,6 +163,41 @@ time, so extra replicas are safe but only help once a single poller saturates.
 
 Ingress sends `/api` to the API Service and `/` to the dashboard, so the browser
 sees a single origin and CORS does not apply.
+
+### Model gateway
+
+`llm.enabled` ships a LiteLLM gateway and, optionally, a bundled Ollama for the
+local alias. Every alias an agent may store in its `model` column is one entry in
+`llm.models`, so adding a model is a values change rather than a code change.
+
+| Value | Default | Notes |
+| --- | --- | --- |
+| `llm.enabled` | `false` | Off means an external gateway; `config.llmGatewayUrl` must point at it. |
+| `llm.existingSecret` | `agentforge-llm` | Must carry `LITELLM_MASTER_KEY` and every provider key the aliases name. |
+| `llm.models[].name` | — | The alias an agent stores. |
+| `llm.models[].model` | — | Upstream model id, provider-prefixed (`openai/...` also covers Ollama, vLLM, LM Studio). |
+| `llm.models[].api_base` | — | OpenAI-compatible base URL; omit for a hosted provider. |
+| `llm.models[].api_key_env` | — | Env var in the Secret holding the key. |
+| `llm.models[].api_key` | — | Literal key for an endpoint that needs none (a local server ignores it). |
+| `llm.ollama.enabled` | `false` | Bundled model server for a local alias. |
+| `llm.ollama.model` | `qwen2.5-coder:7b` | Pulled on first use into a PVC. |
+
+An alias whose `api_key_env` is empty in the Secret stays configured but fails
+authentication, which is what you want for a provider you have not paid for yet.
+
+```yaml
+# A LAN model for the cheap alias, a hosted one for the smart alias.
+llm:
+  enabled: true
+  models:
+    - name: local-coder
+      model: openai/qwen2.5-coder:7b
+      api_base: http://ollama.lan:11434/v1
+      api_key: "ollama"
+    - name: smart
+      model: anthropic/claude-sonnet-4-5
+      api_key_env: ANTHROPIC_API_KEY
+```
 
 ### Security context
 

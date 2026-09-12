@@ -1,0 +1,62 @@
+{{- if .Values.llm.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentforge.fullname" . }}-llm
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "agentforge.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: llm
+  template:
+    metadata:
+      labels:
+        {{- include "agentforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: llm
+      annotations:
+        # The config is a rendered alias table; a change must restart the pod.
+        checksum/config: {{ include (print $.Template.BasePath "/llm-configmap.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: litellm
+          image: "{{ .Values.llm.image.repository }}:{{ .Values.llm.image.tag }}"
+          imagePullPolicy: {{ .Values.llm.image.pullPolicy }}
+          args: ["--config", "/etc/litellm/config.yaml", "--port", "{{ .Values.llm.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.llm.port }}
+          envFrom:
+            # LITELLM_MASTER_KEY plus every api_key_env the aliases name.
+            - secretRef:
+                name: {{ required "llm.existingSecret is required when llm.enabled" .Values.llm.existingSecret }}
+          readinessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.llm.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/litellm
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "agentforge.fullname" . }}-llm
+{{- end }}

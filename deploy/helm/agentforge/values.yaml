@@ -295,7 +295,9 @@ config:
   workspaceCodeServerPort: 8080
 
   openhandsUrl: http://openhands.agentforge.svc.cluster.local:3000
-  llmGatewayUrl: http://litellm.agentforge.svc.cluster.local:4000
+  #: Where the control plane reaches the gateway. With `llm.enabled` this is
+  #: the Service this chart ships; point it elsewhere for an external gateway.
+  llmGatewayUrl: http://agentforge-llm:4000
   defaultAgentModel: local-coder
 
 # ---------------------------------------------------------------------------
@@ -345,3 +347,78 @@ tailscaleIngress:
   # e.g. {tailscale.com/proxy-group: ingress-proxies} to serve through a
   # ProxyGroup instead of a dedicated per-Ingress proxy.
   annotations: {}
+
+# ---------------------------------------------------------------------------
+# Model gateway (LiteLLM)
+# ---------------------------------------------------------------------------
+# An agent stores a logical alias, so this is where an alias becomes a concrete
+# model. It can be an OpenAI-compatible endpoint on the LAN or a hosted
+# provider; nothing above this layer changes when you swap one for the other.
+#
+# Keys never belong in values. `existingSecret` must already carry
+# LITELLM_MASTER_KEY (what agents and the dashboard authenticate with) plus
+# whichever provider keys the aliases below name.
+llm:
+  enabled: false
+
+  image:
+    repository: ghcr.io/berriai/litellm
+    tag: "main-stable"
+    pullPolicy: IfNotPresent
+
+  #: Required when enabled. e.g. a Secret filled by an ExternalSecret.
+  existingSecret: agentforge-llm
+
+  port: 4000
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  #: alias -> backend. Every alias here is one an agent may store in its
+  #: `model` column.
+  #:   model       — the upstream model id, prefixed for LiteLLM's provider
+  #:                 routing (`openai/...` also covers any OpenAI-compatible
+  #:                 server, including Ollama and vLLM).
+  #:   api_base    — omit for a hosted provider.
+  #:   api_key_env — the env var in `existingSecret` holding the key. Omit for
+  #:                 an endpoint that needs no auth and set `api_key` instead.
+  models:
+    - name: local-coder
+      model: openai/qwen2.5-coder:7b
+      api_base: http://agentforge-ollama:11434/v1
+      api_key: "ollama"
+    - name: fast
+      model: openai/gpt-4o-mini
+      api_key_env: OPENAI_API_KEY
+    - name: smart
+      model: anthropic/claude-sonnet-4-5
+      api_key_env: ANTHROPIC_API_KEY
+
+  #: A bundled model server for a local alias. Leave it off when the model
+  #: already lives elsewhere on the LAN and point `api_base` at that host.
+  ollama:
+    enabled: false
+
+    image:
+      repository: ollama/ollama
+      tag: "latest"
+      pullPolicy: IfNotPresent
+
+    #: Pulled on first use; the volume keeps it across restarts.
+    model: qwen2.5-coder:7b
+    storage: 20Gi
+    storageClass: ""
+
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        # A 7B model wants ~6 GiB resident for inference at 4-bit.
+        cpu: "8"
+        memory: 12Gi
