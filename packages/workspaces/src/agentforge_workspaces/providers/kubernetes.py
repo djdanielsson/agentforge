@@ -209,6 +209,9 @@ class KubernetesProvider(WorkspaceProvider):
             reference=reference,
             provider=self.name,
             status=str(WorkspaceStatus.PROVISIONING),
+            pvc_name=names["pvc"],
+            pod_name=names["pod"],
+            service_name=names["svc"],
             code_server_url=f"http://{names['svc']}.{reference}.svc.cluster.local:"
             f"{self.settings.workspace_code_server_port}",
             agent_server_url=f"http://{names['svc']}.{reference}.svc.cluster.local:3000",

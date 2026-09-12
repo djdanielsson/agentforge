@@ -67,6 +67,11 @@ class WorkspaceState:
     ready: bool = False
     code_server_url: str | None = None
     agent_server_url: str | None = None
+    #: Provider-native object names, so the caller can address the workspace
+    #: later without knowing how the provider names things.
+    pvc_name: str | None = None
+    pod_name: str | None = None
+    service_name: str | None = None
     detail: dict[str, Any] = field(default_factory=dict)
 
 

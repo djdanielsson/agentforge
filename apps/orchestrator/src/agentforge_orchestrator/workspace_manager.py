@@ -130,6 +130,11 @@ class WorkspaceManager:
             row.provider = self.provider.name
             row.code_server_url = state.code_server_url
             row.agent_server_url = state.agent_server_url
+            # Without these the git manager has no pod to exec into, so every
+            # commit silently no-ops.
+            row.pvc_name = state.pvc_name
+            row.pod_name = state.pod_name
+            row.service_name = state.service_name
             row.image = spec.image
             if state.detail.get("warnings"):
                 row.error = "; ".join(state.detail["warnings"])[:2000]

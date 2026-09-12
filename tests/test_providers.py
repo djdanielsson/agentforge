@@ -80,6 +80,21 @@ def test_local_provider_lifecycle_uses_a_directory(tmp_path):
     assert not (tmp_path / "af-demo").exists()
 
 
+def test_workspace_state_carries_the_object_names_it_created():
+    """The caller must be able to address a workspace later without knowing the
+    provider's naming scheme. The git manager depends on pod_name: without it
+    every commit is a silent no-op."""
+    from agentforge_workspaces.providers.base import WorkspaceState
+
+    state = WorkspaceState(reference="af-x", provider="kubernetes", status="ready")
+    assert state.pod_name is None
+    state = WorkspaceState(
+        reference="af-x", provider="kubernetes", status="ready",
+        pvc_name="af-x-workspace", pod_name="af-x-ws", service_name="af-x-ws",
+    )
+    assert state.pod_name == "af-x-ws"
+
+
 def test_provider_is_required_to_be_idempotent_for_destroy():
     """Destroying a workspace that never existed is not an error."""
     from agentforge_shared.config import Settings

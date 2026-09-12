@@ -125,6 +125,19 @@ def build_pod(
     if not permissions.filesystem.workspace:
         raise ValueError("filesystem.workspace must be true; the agent needs somewhere to work")
 
+    # An explicit numeric UID satisfies runAsNonRoot without the kubelet having
+    # to read USER out of the image, which fails for images that declare a
+    # non-numeric user. Both containers share the workspace's fsGroup so they
+    # can write the same volume.
+    def _workspace_security_context() -> client.V1SecurityContext:
+        return client.V1SecurityContext(
+            run_as_user=1000,
+            run_as_group=1000,
+            run_as_non_root=True,
+            allow_privilege_escalation=False,
+            capabilities=client.V1Capabilities(drop=["ALL"]),
+        )
+
     warnings: list[str] = []
     env = [
         client.V1EnvVar(name="DEFAULT_WORKSPACE", value=WORKSPACE_MOUNT),
@@ -183,11 +196,7 @@ def build_pod(
             requests={"cpu": cpu_request, "memory": memory_request},
             limits={"cpu": cpu_limit, "memory": memory_limit},
         ),
-        security_context=client.V1SecurityContext(
-            allow_privilege_escalation=False,
-            read_only_root_filesystem=False,
-            capabilities=client.V1Capabilities(drop=["ALL"]),
-        ),
+        security_context=_workspace_security_context(),
         readiness_probe=client.V1Probe(
             http_get=client.V1HTTPGetAction(path="/healthz", port=code_server_port),
             initial_delay_seconds=5,
@@ -205,10 +214,7 @@ def build_pod(
             requests={"cpu": cpu_request, "memory": memory_request},
             limits={"cpu": cpu_limit, "memory": memory_limit},
         ),
-        security_context=client.V1SecurityContext(
-            allow_privilege_escalation=False,
-            capabilities=client.V1Capabilities(drop=["ALL"]),
-        ),
+        security_context=_workspace_security_context(),
         readiness_probe=client.V1Probe(
             http_get=client.V1HTTPGetAction(path="/health", port=agent_server_port),
             initial_delay_seconds=10,

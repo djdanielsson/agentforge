@@ -87,6 +87,20 @@ def test_all_capabilities_are_dropped_and_escalation_is_off(manifests, permissio
     assert pod.spec.security_context.run_as_non_root is True
 
 
+def test_both_containers_declare_an_explicit_numeric_uid(manifests, permissions):
+    """runAsNonRoot with no runAsUser makes the kubelet inspect the image's USER.
+
+    An image declaring a non-numeric user then fails admission outright with
+    CreateContainerConfigError. The OpenHands image does exactly that, which is
+    how this was found: the workspace pod came up with code-server running and
+    openhands refusing to start.
+    """
+    pod = _pod(manifests, permissions)
+    for container in pod.spec.containers:
+        assert container.security_context.run_as_user == 1000
+        assert container.security_context.run_as_non_root is True
+
+
 def test_both_containers_mount_only_the_workspace(manifests, permissions):
     pod = _pod(manifests, permissions)
     names = {c.name for c in pod.spec.containers}
