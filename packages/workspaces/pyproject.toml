@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-aiw-workspace = "agentforge_workspaces.cli:main"
+agentforge-workspaces = "agentforge_workspaces.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -21,7 +21,7 @@ from .task_queue import TaskQueue
 from .webhook_dispatcher import WebhookDispatcher
 from .workspace_manager import WorkspaceManager
 
-log = logging.getLogger("aiw.orchestrator")
+log = logging.getLogger("agentforge.orchestrator")
 
 _running = True
 

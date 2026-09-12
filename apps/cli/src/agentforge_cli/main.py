@@ -1,9 +1,9 @@
-"""`aiw` — talk to the AgentForge control plane.
+"""The `agentforge` CLI — talk to the AgentForge control plane.
 
-aiw projects
-aiw ask ComplianceFlow "Fix the authentication bug"
-aiw fleet
-aiw watch ComplianceFlow
+    agentforge projects
+    agentforge ask ComplianceFlow "Fix the authentication bug"
+    agentforge fleet
+    agentforge watch ComplianceFlow
 """
 
 from __future__ import annotations
@@ -234,7 +234,7 @@ def cmd_watch(client: WorkbenchClient, args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="aiw", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="agentforge", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
         "--url",

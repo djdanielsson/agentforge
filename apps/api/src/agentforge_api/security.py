@@ -28,7 +28,7 @@ from .deps import get_session
 
 log = logging.getLogger(__name__)
 
-KEY_PREFIX = "aiw"
+KEY_PREFIX = "af"
 PREFIX_LENGTH = 8
 
 

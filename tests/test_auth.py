@@ -39,7 +39,7 @@ def test_a_minted_key_grants_access(client):
         # create the key while auth is off, then use it
         pass
     created = client.post(f"{API}/keys", json={"name": "ci"}).json()
-    assert created["key"].startswith("aiw_")
+    assert created["key"].startswith("af_")
 
     with auth_enabled():
         resp = client.get(f"{API}/projects", headers={"x-api-key": created["key"]})
@@ -61,7 +61,7 @@ def test_a_wrong_key_is_rejected(client):
     client.post(f"{API}/keys", json={"name": "real"})
 
     with auth_enabled():
-        resp = client.get(f"{API}/projects", headers={"x-api-key": "aiw_deadbeef_nope"})
+        resp = client.get(f"{API}/projects", headers={"x-api-key": "af_deadbeef_nope"})
         assert resp.status_code == 401
 
 

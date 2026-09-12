@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # --- database ---
-    database_url: str = "sqlite+pysqlite:///./aiw.db"
+    database_url: str = "sqlite+pysqlite:///./agentforge.db"
 
     # --- api ---
     api_host: str = "0.0.0.0"
