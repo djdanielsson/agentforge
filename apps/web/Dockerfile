@@ -12,6 +12,10 @@ COPY apps/web/package.json apps/web/package-lock.json ./
 RUN npm ci
 
 COPY apps/web/ ./
+# Monaco is bundled rather than CDN-loaded, which makes the production build big
+# enough that Node's default heap (sized from the container, and Kaniko's is not
+# generous) can be exhausted mid-render. Say the size out loud instead.
+ENV NODE_OPTIONS=--max-old-space-size=3072
 # VITE_API_BASE is deliberately unset: the default /api/v1 is correct behind
 # the chart's nginx, which proxies /api to the API service.
 RUN npm run build
