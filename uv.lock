@@ -5,6 +5,7 @@ requires-python = ">=3.11"
 [manifest]
 members = [
     "agentforge",
+    "agentforge-agent-server",
     "agentforge-api",
     "agentforge-cli",
     "agentforge-orchestrator",
@@ -33,6 +34,23 @@ dev = [
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.6" },
+]
+
+[[package]]
+name = "agentforge-agent-server"
+version = "0.1.0"
+source = { editable = "packages/agent-server" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "websockets", specifier = ">=12.0" },
 ]
 
 [[package]]
@@ -80,6 +98,7 @@ name = "agentforge-orchestrator"
 version = "0.1.0"
 source = { editable = "apps/orchestrator" }
 dependencies = [
+    { name = "agentforge-agent-server" },
     { name = "agentforge-shared" },
     { name = "agentforge-workspaces" },
     { name = "httpx" },
@@ -88,6 +107,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agentforge-agent-server", editable = "packages/agent-server" },
     { name = "agentforge-shared", editable = "packages/shared" },
     { name = "agentforge-workspaces", editable = "packages/workspaces" },
     { name = "httpx", specifier = ">=0.27" },

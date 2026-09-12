@@ -46,6 +46,8 @@ class Settings(BaseSettings):
 
     # --- agents ---
     openhands_url: str = "http://openhands:3000"
+    #: Optional bearer token for the Agent Server API.
+    agent_server_api_key: str | None = None
     llm_gateway_url: str = "http://litellm:4000"
     default_agent_model: str = "local-coder"
 

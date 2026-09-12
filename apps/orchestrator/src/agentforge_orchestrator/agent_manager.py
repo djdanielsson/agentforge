@@ -1,29 +1,45 @@
 """Agent lifecycle and task dispatch.
 
-Take a queued task, hand it to the project's agent runtime, stream the result
-back as events, and write the commits it produced.
+Takes a queued task, hands it to the workspace's OpenHands Agent Server, turns
+whatever comes back into AgentForge events, and commits the result. All
+knowledge of the Agent Server's API lives in `agentforge-agent-server`, so this
+module deals only in our own vocabulary.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
+from agentforge_agent_server import (
+    AgentEvent,
+    AgentServerClient,
+    AgentServerError,
+    AgentSpec,
+)
 from agentforge_shared.config import get_settings
 from agentforge_shared.db import session_scope
 from agentforge_shared.enums import AgentStatus, EventType, TaskKind, TaskStatus, WorkspaceStatus
 from agentforge_shared.events import record_event
-from agentforge_shared.models import Agent, Project, Task, Workspace
+from agentforge_shared.models import Agent, Task, Workspace
 from sqlalchemy import select
-
-from .openhands import OpenHandsClient
 
 log = logging.getLogger(__name__)
 
+ClientFactory = Callable[[str], AgentServerClient]
+
+
+def _default_client_factory(url: str) -> AgentServerClient:
+    settings = get_settings()
+    return AgentServerClient(url, api_key=settings.agent_server_api_key)
+
 
 class AgentManager:
-    def __init__(self, client: OpenHandsClient | None = None) -> None:
+    def __init__(self, client_factory: ClientFactory | None = None) -> None:
         self.settings = get_settings()
-        self.client = client or OpenHandsClient(self.settings.openhands_url)
+        self._client_factory = client_factory or _default_client_factory
+
+    # --- selection --------------------------------------------------------
 
     def runnable_agents(self) -> list[Agent]:
         with session_scope() as session:
@@ -38,73 +54,109 @@ class AgentManager:
 
     def workspace_for(self, agent: Agent) -> Workspace | None:
         with session_scope() as session:
-            return session.scalars(
+            workspace = session.scalars(
                 select(Workspace).where(Workspace.project_id == agent.project_id)
             ).first()
+            if workspace is not None:
+                session.expunge(workspace)
+            return workspace
+
+    def _client(self, workspace: Workspace) -> AgentServerClient:
+        url = workspace.agent_server_url or self.settings.openhands_url
+        return self._client_factory(url)
+
+    # --- dispatch ---------------------------------------------------------
 
     def dispatch(self, agent: Agent, task: Task) -> None:
-        """Send one task to the agent and record the outcome."""
+        """Run one task to completion (or to a stop that needs a human)."""
         workspace = self.workspace_for(agent)
         if workspace is None or workspace.status != WorkspaceStatus.READY:
-            log.info("agent %s has no ready workspace; skipping", agent.name)
+            log.info("agent %s has no ready workspace; leaving task %s queued", agent.name, task.id)
             return
 
         self._set_agent(agent.id, AgentStatus.WORKING, current_task_id=task.id)
+        self._event(
+            agent,
+            EventType.AGENT_STARTED,
+            task=task,
+            payload={"agent": agent.name, "model": agent.model, "kind": task.kind},
+        )
+        self._event(
+            agent,
+            EventType.AGENT_PROGRESS,
+            task=task,
+            payload={"message": f"picked up: {task.description[:120]}", "kind": task.kind},
+        )
         self._event(
             agent, EventType.TASK_STATUS, task=task, payload={"status": str(TaskStatus.RUNNING)}
         )
 
         try:
-            session_id = self._ensure_session(agent, workspace)
-            reply = self.client.send_message(session_id=session_id, content=task.description)
-        except Exception as exc:  # noqa: BLE001 - runtime is external
-            log.exception("agent %s failed task %s", agent.name, task.id)
-            self._event(agent, EventType.TASK_OUTPUT, task=task, payload={"error": str(exc)})
-            self._set_agent(agent.id, AgentStatus.ERROR, error=str(exc)[:2000])
-            with session_scope() as session:
-                row = session.get(Task, task.id)
-                row.status = TaskStatus.FAILED
-                row.error = str(exc)[:2000]
+            with self._client(workspace) as client:
+                session_id = self._ensure_session(client, agent, workspace)
+                event = client.send_message(session_id, self._prompt_for(task, agent))
+        except AgentServerError as exc:
+            log.error("agent %s failed task %s: %s", agent.name, task.id, exc)
+            self._fail(agent, task, str(exc))
             return
 
-        self._append_message(agent.id, "assistant", reply.content)
-        self._event(
-            agent,
-            EventType.AGENT_MESSAGE,
-            task=task,
-            payload={"role": "assistant", "content": reply.content},
-        )
+        self._record_reply(agent, task, event)
 
-        if reply.permission_request:
+    def _prompt_for(self, task: Task, agent: Agent) -> str:
+        """Frame a bare instruction as the kind of work it is.
+
+        The Agent Server does not need to know about our task taxonomy, but it
+        does need to be told what outcome is expected.
+        """
+        if task.kind == TaskKind.REVIEW:
+            return f"Review the current changes and report findings. {task.description}"
+        if task.kind == TaskKind.TEST:
+            return f"Run the test suite and report the result. {task.description}"
+        if task.kind == TaskKind.DEPLOY:
+            return f"Prepare the deployment described and report what you did. {task.description}"
+        return task.description
+
+    def _record_reply(self, agent: Agent, task: Task, event: AgentEvent) -> None:
+        """Translate one agent turn into events, task state and commits."""
+        if event.error:
+            self._event(agent, EventType.AGENT_FAILED, task=task, payload={"error": event.error})
+            self._fail(agent, task, event.error)
+            return
+
+        if event.permission_request:
             self._set_agent(agent.id, AgentStatus.AWAITING_APPROVAL)
             self._event(
-                agent, EventType.PERMISSION_REQUEST, task=task, payload=reply.permission_request
+                agent,
+                EventType.AGENT_PERMISSION_REQUIRED,
+                task=task,
+                payload=event.permission_request,
             )
-            with session_scope() as session:
-                row = session.get(Task, task.id)
-                row.status = TaskStatus.BLOCKED
+            self._block_task(task.id, event.permission_request.get("reason") or "awaiting approval")
             return
 
-        if reply.blocked:
+        if event.blocked:
+            question = event.question or event.content or "needs input"
             self._set_agent(agent.id, AgentStatus.BLOCKED)
+            self._event(agent, EventType.AGENT_WAITING, task=task, payload={"question": question})
+            self._block_task(task.id, question)
+            return
+
+        if event.content:
+            self._append_message(agent.id, "assistant", event.content)
             self._event(
                 agent,
-                EventType.AGENT_QUESTION,
+                EventType.AGENT_MESSAGE,
                 task=task,
-                payload={"question": reply.question or reply.content},
+                payload={"role": "assistant", "content": event.content},
             )
-            with session_scope() as session:
-                row = session.get(Task, task.id)
-                row.status = TaskStatus.BLOCKED
-                row.result = reply.question or reply.content
-            return
 
-        commits = self._commit_if_dirty(agent, workspace, task)
+        commits = self._commit_if_dirty(agent, task)
         with session_scope() as session:
             row = session.get(Task, task.id)
-            row.status = TaskStatus.SUCCEEDED
-            row.result = reply.content
-            row.commits = commits
+            if row is not None:
+                row.status = TaskStatus.SUCCEEDED
+                row.result = event.content
+                row.commits = commits
 
         self._event(
             agent,
@@ -113,7 +165,7 @@ class AgentManager:
             payload={
                 "task_id": task.id,
                 "kind": task.kind,
-                "result": reply.content,
+                "result": event.content,
                 "commits": commits,
             },
         )
@@ -121,13 +173,11 @@ class AgentManager:
         self._set_agent(agent.id, AgentStatus.IDLE, clear_task=True)
 
     def _emit_kind_outcome(self, agent: Agent, task: Task, commits: list[str]) -> None:
-        """Translate a finished semantic task into its outcome event.
+        """Emit the outcome event for a semantic task.
 
-        `test` tasks produce `test.completed`, `review` produces
-        `review.completed`, and so on — so a subscriber can listen for the
-        outcome it cares about instead of filtering agent chatter.
+        A subscriber that cares about test results listens for `test.completed`
+        rather than filtering agent chatter.
         """
-        kind = str(task.kind)
         payload = {"task_id": task.id, "commits": commits, **(task.payload or {})}
         mapping = {
             TaskKind.TEST: EventType.TEST_COMPLETED,
@@ -135,52 +185,92 @@ class AgentManager:
             TaskKind.DEPLOY: EventType.DEPLOY_COMPLETED,
         }
         try:
-            event_type = mapping.get(TaskKind(kind))
+            event_type = mapping.get(TaskKind(str(task.kind)))
         except ValueError:
             event_type = None
         if event_type is not None:
             self._event(agent, event_type, task=task, payload=payload)
 
-    # --- helpers ----------------------------------------------------------
+    # --- session ----------------------------------------------------------
 
-    def _ensure_session(self, agent: Agent, workspace: Workspace) -> str:
-        """Start the OpenHands session once, then reuse it for every task."""
+    def _ensure_session(self, client: AgentServerClient, agent: Agent, workspace: Workspace) -> str:
+        """Create the Agent Server agent and conversation once, then reuse them."""
         if agent.session_id:
             return agent.session_id
-        started = self.client.start_agent(
-            agent_id=agent.id,
-            workspace_url=workspace.agent_server_url or workspace.code_server_url or "",
-            model=agent.model,
-        )
-        session_id = started.get("session_id") or started.get("id") or agent.id
-        with session_scope() as session:
-            session.get(Agent, agent.id).session_id = session_id
-        self._event(agent, EventType.AGENT_STARTED, payload={"session_id": session_id})
-        return session_id
 
-    def _commit_if_dirty(self, agent: Agent, workspace: Workspace, task: Task) -> list[str]:
+        server_agent = client.create_agent(
+            AgentSpec(
+                name=agent.name,
+                model=agent.model,
+                workspace_id=workspace.namespace,
+                metadata={
+                    "agentforge_agent_id": agent.id,
+                    "agentforge_project_id": agent.project_id,
+                    "agentforge_branch": agent.branch,
+                },
+            )
+        )
+        server_agent_id = str(server_agent.get("id") or server_agent.get("agent_id") or agent.id)
+
+        run = client.start_conversation(server_agent_id)
+        with session_scope() as session:
+            session.get(Agent, agent.id).session_id = run.session_id
+        self._event(agent, EventType.AGENT_STARTED, payload={"session_id": run.session_id})
+        return run.session_id
+
+    # --- git --------------------------------------------------------------
+
+    def _commit_if_dirty(self, agent: Agent, task: Task) -> list[str]:
+        workspace = self.workspace_for(agent)
+        if workspace is None or not workspace.pod_name:
+            return []
+
         from .git_manager import GitManager
 
-        if not workspace.pod_name:
-            return []
         git = GitManager(workspace.namespace, workspace.pod_name)
         try:
             state = git.state()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - the pod may be mid-restart
             log.warning("git state unavailable for %s: %s", workspace.namespace, exc)
             return []
         if state.clean:
             return []
+
         git.ensure_branch(agent.branch or f"agent/{agent.id}")
         sha = git.commit_all(f"{agent.name}: {task.description[:60]}")
         self._event(
-            agent, EventType.GIT_COMMIT, task=task, payload={"commit": sha, "branch": state.branch}
+            agent,
+            EventType.COMMIT_CREATED,
+            task=task,
+            payload={"commit": sha, "branch": state.branch},
         )
-        try:
-            git.push(state.branch)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("push failed for %s: %s", state.branch, exc)
+
+        # Pushing is opt-in: it is the point where agent output leaves the sandbox.
+        from agentforge_shared.permissions import AgentPermissions
+
+        if AgentPermissions.from_dict(agent.policy).git.push:
+            try:
+                git.push(state.branch)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("push failed for %s: %s", state.branch, exc)
         return [sha]
+
+    # --- state helpers ----------------------------------------------------
+
+    def _fail(self, agent: Agent, task: Task, error: str) -> None:
+        with session_scope() as session:
+            row = session.get(Task, task.id)
+            if row is not None:
+                row.status = TaskStatus.FAILED
+                row.error = error[:2000]
+        self._set_agent(agent.id, AgentStatus.ERROR, error=error[:2000])
+
+    def _block_task(self, task_id: str, reason: str) -> None:
+        with session_scope() as session:
+            row = session.get(Task, task_id)
+            if row is not None:
+                row.status = TaskStatus.BLOCKED
+                row.result = reason
 
     def _set_agent(
         self,
@@ -236,6 +326,3 @@ class AgentManager:
                 task_id=task.id if task else None,
                 payload=payload or {},
             )
-
-
-__all__ = ["AgentManager", "Project"]

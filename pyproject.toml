@@ -5,7 +5,14 @@ description = "Self-hosted AI engineering control plane"
 requires-python = ">=3.11"
 
 [tool.uv.workspace]
-members = ["packages/shared", "packages/workspaces", "apps/api", "apps/orchestrator", "apps/cli"]
+members = [
+    "packages/shared",
+    "packages/workspaces",
+    "packages/agent-server",
+    "apps/api",
+    "apps/orchestrator",
+    "apps/cli",
+]
 
 [dependency-groups]
 dev = [
@@ -30,4 +37,11 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["packages/shared/src", "apps/api/src", "apps/orchestrator/src", "packages/workspaces/src", "apps/cli/src"]
+pythonpath = [
+    "packages/shared/src",
+    "packages/workspaces/src",
+    "packages/agent-server/src",
+    "apps/api/src",
+    "apps/orchestrator/src",
+    "apps/cli/src",
+]
