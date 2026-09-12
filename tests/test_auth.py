@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import contextlib
 
-import pytest
-
 API = "/api/v1"
 
 
@@ -68,14 +66,11 @@ def test_a_wrong_key_is_rejected(client):
 
 
 def test_read_only_key_cannot_write(client):
-    readonly = client.post(
-        f"{API}/keys", json={"name": "ro", "scopes": ["read"]}
-    ).json()
+    readonly = client.post(f"{API}/keys", json={"name": "ro", "scopes": ["read"]}).json()
 
     with auth_enabled():
         assert (
-            client.get(f"{API}/projects", headers={"x-api-key": readonly["key"]}).status_code
-            == 200
+            client.get(f"{API}/projects", headers={"x-api-key": readonly["key"]}).status_code == 200
         )
         resp = client.post(
             f"{API}/projects",
@@ -122,9 +117,7 @@ def test_hashes_are_salted_by_content_not_stored_plaintext(client):
 def test_project_pinned_key_cannot_reach_other_projects(client):
     first = client.post(f"{API}/projects", json={"name": "Pinned"}).json()
     second = client.post(f"{API}/projects", json={"name": "Other"}).json()
-    pinned = client.post(
-        f"{API}/keys", json={"name": "pinned", "project_id": first["id"]}
-    ).json()
+    pinned = client.post(f"{API}/keys", json={"name": "pinned", "project_id": first["id"]}).json()
     assert pinned["project_id"] == first["id"]
 
     with auth_enabled():

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from agentforge_shared.enums import AgentStatus, EventType
 from agentforge_shared.models import Agent
-from agentforge_shared.schemas import AgentMessageIn, AgentRead, AgentUpdate, PermissionDecisionIn
+from agentforge_shared.permissions import AgentPermissions
+from agentforge_shared.schemas import (
+    AgentMessageIn,
+    AgentRead,
+    AgentUpdate,
+    PermissionDecisionIn,
+    PermissionsRead,
+)
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
@@ -39,6 +46,41 @@ def update_agent(session: DbSession, agent_id: str, payload: AgentUpdate) -> Age
     session.commit()
     session.refresh(agent)
     return agent
+
+
+@router.post("/{agent_id}/restart", response_model=AgentRead)
+def restart_agent(session: DbSession, agent_id: str) -> Agent:
+    """Drop the agent's OpenHands session and let the orchestrator start a new one.
+
+    The workspace is untouched: restarting an agent must not throw away the work
+    in /workspace.
+    """
+    agent = _get_agent(session, agent_id)
+    agent.session_id = None
+    agent.current_task_id = None
+    agent.error = None
+    agent.status = AgentStatus.STARTING
+    record_event(
+        session,
+        type=EventType.AGENT_STATUS,
+        project_id=agent.project_id,
+        agent_id=agent.id,
+        payload={"status": str(AgentStatus.STARTING), "reason": "restart requested"},
+    )
+    session.commit()
+    session.refresh(agent)
+    return agent
+
+
+@router.get("/{agent_id}/permissions", response_model=PermissionsRead)
+def get_permissions(session: DbSession, agent_id: str) -> PermissionsRead:
+    """The effective policy, with defaults filled in.
+
+    A caller needs to know what the agent may actually do, not what was stored.
+    """
+    agent = _get_agent(session, agent_id)
+    policy = AgentPermissions.from_dict(agent.policy)
+    return PermissionsRead(agent_id=agent.id, policy=policy.model_dump())
 
 
 @router.post("/{agent_id}/stop", response_model=AgentRead)

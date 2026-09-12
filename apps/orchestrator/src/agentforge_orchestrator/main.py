@@ -45,6 +45,7 @@ def cycle(
         workspaces.reconcile_one(workspace)
 
     workspaces.reconcile_readiness()
+    workspaces.reconcile_deletions()
 
     task = queue.lease()
     if task is None:
@@ -59,7 +60,8 @@ def cycle(
             "task %s references unknown/stopped agent %s; releasing", task.id, task.agent_id
         )
         queue._set_status(
-            task.id, __import__("agentforge_shared.enums", fromlist=["TaskStatus"]).TaskStatus.QUEUED
+            task.id,
+            __import__("agentforge_shared.enums", fromlist=["TaskStatus"]).TaskStatus.QUEUED,
         )  # noqa: SLF001
         return
 

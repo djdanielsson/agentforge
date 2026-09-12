@@ -28,11 +28,16 @@ class Settings(BaseSettings):
     api_port: int = 8000
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
-    # --- workspaces (k8s) ---
+    # --- workspaces ---
+    #: kubernetes (reference) | podman (local dev) | local (no isolation, dev only)
+    workspace_provider: str = "kubernetes"
+    #: Where the local provider puts workspaces. Ignored by other providers.
+    local_workspace_root: str = "~/.agentforge/workspaces"
     k8s_in_cluster: bool = False
     kubeconfig: str | None = None
     workspace_namespace_prefix: str = "af"
     workspace_image: str = "ghcr.io/coder/code-server:latest"
+    workspace_agent_image: str = "ghcr.io/all-hands-ai/openhands:latest"
     workspace_cpu_request: str = "500m"
     workspace_memory_request: str = "1Gi"
     workspace_storage: str = "10Gi"

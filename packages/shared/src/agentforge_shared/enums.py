@@ -32,7 +32,7 @@ class AgentStatus(StrEnum):
     STARTING = "starting"
     IDLE = "idle"
     WORKING = "working"
-    BLOCKED = "blocked"          # waiting on a human answer
+    BLOCKED = "blocked"  # waiting on a human answer
     AWAITING_APPROVAL = "awaiting_approval"
     STOPPED = "stopped"
     ERROR = "error"
@@ -40,7 +40,7 @@ class AgentStatus(StrEnum):
 
 class TaskStatus(StrEnum):
     QUEUED = "queued"
-    LEASED = "leased"            # claimed by a worker, not yet running
+    LEASED = "leased"  # claimed by a worker, not yet running
     RUNNING = "running"
     BLOCKED = "blocked"
     SUCCEEDED = "succeeded"
@@ -60,7 +60,7 @@ class TaskKind(StrEnum):
     REVIEW = "review"
     TEST = "test"
     DEPLOY = "deploy"
-    MAINTAIN = "maintain"        # scheduled/automation work
+    MAINTAIN = "maintain"  # scheduled/automation work
 
 
 class Priority(StrEnum):

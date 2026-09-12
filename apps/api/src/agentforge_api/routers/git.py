@@ -34,7 +34,7 @@ def _workspace(session, project_id: str):
 def _exec(workspace, command: list[str]) -> str:
     """Run a command inside the workspace pod. Imported lazily so the API can
     start without a kubeconfig present."""
-    from agentforge_workspaces.controller import exec_in_workspace
+    from agentforge_workspaces.providers.kubernetes import exec_in_workspace
 
     return exec_in_workspace(workspace.namespace, workspace.pod_name, command)
 

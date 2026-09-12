@@ -29,7 +29,9 @@ class WorkbenchClient:
         api_key: str | None = None,
         client: httpx.Client | None = None,
     ) -> None:
-        self.base_url = (base_url or os.environ.get("AGENTFORGE_API_URL") or DEFAULT_URL).rstrip("/")
+        self.base_url = (base_url or os.environ.get("AGENTFORGE_API_URL") or DEFAULT_URL).rstrip(
+            "/"
+        )
         self.api_key = api_key or os.environ.get("AGENTFORGE_API_KEY")
         if client is not None:
             self._client = client
@@ -80,8 +82,9 @@ class WorkbenchClient:
     def stop_agent(self, agent_id: str) -> dict:
         return self.request("POST", f"/agents/{agent_id}/stop")
 
-    def create_task(self, project_id: str, prompt: str, agent_id: str | None = None,
-                    kind: str = "implement") -> dict:
+    def create_task(
+        self, project_id: str, prompt: str, agent_id: str | None = None, kind: str = "implement"
+    ) -> dict:
         return self.request(
             "POST",
             f"/projects/{project_id}/tasks",
@@ -97,8 +100,9 @@ class WorkbenchClient:
     def test(self, project_id: str, command: str | None = None) -> dict:
         return self.request("POST", f"/projects/{project_id}/test", json={"command": command})
 
-    def deploy(self, project_id: str, environment: str = "staging",
-               branch: str | None = None) -> dict:
+    def deploy(
+        self, project_id: str, environment: str = "staging", branch: str | None = None
+    ) -> dict:
         return self.request(
             "POST",
             f"/projects/{project_id}/deploy",

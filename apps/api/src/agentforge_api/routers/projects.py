@@ -11,6 +11,7 @@ from agentforge_shared.schemas import (
     ProjectDetail,
     ProjectRead,
     ProjectUpdate,
+    WorkspaceActionAccepted,
     WorkspaceRead,
 )
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -93,6 +94,76 @@ def delete_project(
     session.commit()
 
 
+@router.post(
+    "/{project_id}/workspace",
+    response_model=WorkspaceActionAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_workspace(
+    session: DbSession, project_id: str, principal: Principal = Depends(require_write)
+) -> WorkspaceActionAccepted:
+    """Request (re)provisioning of a project's workspace.
+
+    Idempotent: the orchestrator converges on the desired state, so calling this
+    twice is not an error and does not create a second workspace.
+    """
+    project = _get_project(session, project_id, principal)
+    if project.workspace is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project has no workspace record")
+
+    workspace = project.workspace
+    if workspace.status == WorkspaceStatus.READY:
+        return WorkspaceActionAccepted(
+            project_id=project.id,
+            action="provision",
+            status=str(workspace.status),
+            detail="workspace is already ready",
+        )
+
+    workspace.status = WorkspaceStatus.PENDING
+    workspace.error = None
+    record_event(
+        session,
+        type=EventType.AGENT_PROGRESS,
+        project_id=project.id,
+        payload={"action": "provision-requested", "namespace": workspace.namespace},
+    )
+    session.commit()
+    return WorkspaceActionAccepted(
+        project_id=project.id,
+        action="provision",
+        status=str(workspace.status),
+        detail="the orchestrator will provision this workspace",
+    )
+
+
+@router.delete(
+    "/{project_id}/workspace",
+    response_model=WorkspaceActionAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def delete_workspace(
+    session: DbSession, project_id: str, principal: Principal = Depends(require_write)
+) -> WorkspaceActionAccepted:
+    """Destroy the workspace and everything the agent could reach.
+
+    This deletes the namespace, so uncommitted work is lost. Committed work on a
+    pushed branch survives in the remote.
+    """
+    project = _get_project(session, project_id, principal)
+    if project.workspace is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project has no workspace record")
+
+    project.workspace.status = WorkspaceStatus.DELETING
+    session.commit()
+    return WorkspaceActionAccepted(
+        project_id=project.id,
+        action="destroy",
+        status=str(WorkspaceStatus.DELETING),
+        detail="the orchestrator will destroy this workspace",
+    )
+
+
 @router.get("/{project_id}/workspace", response_model=WorkspaceRead)
 def get_workspace(
     session: DbSession, project_id: str, principal: Principal = Depends(get_principal)
@@ -115,9 +186,7 @@ def add_agent(
 
 
 @router.get("/{project_id}/agents", response_model=list[AgentRead])
-def list_agents(
-    session: DbSession, project_id: str, principal: Principal = Depends(get_principal)
-):
+def list_agents(session: DbSession, project_id: str, principal: Principal = Depends(get_principal)):
     project = _get_project(session, project_id, principal)
     return sorted(project.agents, key=lambda a: a.created_at)
 

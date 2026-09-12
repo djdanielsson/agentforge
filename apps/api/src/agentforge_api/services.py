@@ -21,6 +21,7 @@ from agentforge_shared.enums import (
 )
 from agentforge_shared.events import record_event
 from agentforge_shared.models import Agent, Project, Task, Workspace
+from agentforge_shared.permissions import DEFAULT_PERMISSIONS, AgentPermissions
 from agentforge_shared.schemas import AgentCreate, ProjectCreate
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -79,6 +80,12 @@ def create_project(session: Session, payload: ProjectCreate) -> Project:
 
 def create_agent(session: Session, project: Project, payload: AgentCreate) -> Agent:
     default_model = (project.settings or {}).get("default_model", "local-coder")
+    # An unspecified policy means the restrictive default, never "no policy".
+    policy = (
+        AgentPermissions.from_dict(payload.policy)
+        if payload.policy is not None
+        else DEFAULT_PERMISSIONS
+    )
     agent = Agent(
         project_id=project.id,
         workspace_id=project.workspace.id if project.workspace else None,
@@ -86,6 +93,7 @@ def create_agent(session: Session, project: Project, payload: AgentCreate) -> Ag
         model=payload.model or default_model,
         branch=payload.branch or f"agent/{slugify(payload.name)}",
         status=AgentStatus.STARTING,
+        policy=policy.model_dump(),
     )
     session.add(agent)
     session.flush()
@@ -136,8 +144,11 @@ def create_task(
         project_id=project.id,
         agent_id=agent_id,
         task_id=task.id,
-        payload={"description": description, "kind": str(task.kind),
-                 "priority": str(task.priority)},
+        payload={
+            "description": description,
+            "kind": str(task.kind),
+            "priority": str(task.priority),
+        },
     )
     session.commit()
     session.refresh(task)

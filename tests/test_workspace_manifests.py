@@ -1,4 +1,8 @@
-"""Workspace manifests carry our isolation guarantees."""
+"""The manifests are where the permission policy becomes real.
+
+If a policy field does not change a manifest, it is documentation rather than
+enforcement, and these tests exist to catch that.
+"""
 
 from __future__ import annotations
 
@@ -13,43 +17,183 @@ def manifests():
     return m
 
 
-def test_pod_never_mounts_a_host_path_and_has_no_api_token(manifests):
-    pod = manifests.build_pod(
-        "af-demo-ws",
-        "af-demo",
-        image="codercom/code-server:latest",
-        pvc_name="af-demo-workspace",
-        git_repository="https://github.com/example/demo",
-        git_revision="main",
-    )
+@pytest.fixture()
+def permissions():
+    from agentforge_shared.permissions import AgentPermissions
 
-    assert pod.spec.automount_service_account_token is False
+    return AgentPermissions()
+
+
+def _pod(manifests, permissions, **overrides):
+    kwargs = dict(
+        name="af-demo-ws",
+        namespace="af-demo",
+        image="codercom/code-server:latest",
+        agent_image="ghcr.io/all-hands-ai/openhands:latest",
+        pvc_name="af-demo-workspace",
+        permissions=permissions,
+    )
+    kwargs.update(overrides)
+    return manifests.build_pod(**kwargs)
+
+
+# --- isolation invariants ---------------------------------------------------
+
+
+def test_pod_never_mounts_a_host_path(manifests, permissions):
+    pod = _pod(manifests, permissions, git_repository="https://github.com/example/demo")
     for volume in pod.spec.volumes:
         assert volume.host_path is None, "workspaces must never mount the host"
 
-    main = next(c for c in pod.spec.containers if c.name == "code-server")
-    mounts = {m.mount_path for m in main.volume_mounts}
-    assert mounts == {"/workspace"}
-    assert main.security_context.allow_privilege_escalation is False
-    assert main.security_context.capabilities.drop == ["ALL"]
+
+def test_no_api_token_is_mounted_by_default(manifests, permissions):
+    pod = _pod(manifests, permissions)
+    assert pod.spec.automount_service_account_token is False
 
 
-def test_git_bootstrap_runs_as_the_workspace_uid(manifests):
-    pod = manifests.build_pod(
-        "af-demo-ws",
-        "af-demo",
-        image="codercom/code-server:latest",
-        pvc_name="af-demo-workspace",
-        git_repository="https://github.com/example/demo",
+def test_requesting_host_filesystem_is_refused_not_downgraded(manifests, permissions):
+    """Silently ignoring the flag would leave a user believing isolation held."""
+    permissions.filesystem.host = True
+    with pytest.raises(ValueError, match="never mount the host"):
+        _pod(manifests, permissions)
+
+
+def test_requesting_other_projects_is_refused(manifests, permissions):
+    permissions.filesystem.other_projects = True
+    with pytest.raises(ValueError, match="project isolation"):
+        _pod(manifests, permissions)
+
+
+def test_workspace_mount_is_required(manifests, permissions):
+    permissions.filesystem.workspace = False
+    with pytest.raises(ValueError, match="needs somewhere to work"):
+        _pod(manifests, permissions)
+
+
+# --- policy mapping ---------------------------------------------------------
+
+
+def test_kubernetes_access_grants_the_service_account_token(manifests, permissions):
+    permissions.kubernetes.enabled = True
+    pod = _pod(manifests, permissions)
+    assert pod.spec.automount_service_account_token is True
+
+
+def test_all_capabilities_are_dropped_and_escalation_is_off(manifests, permissions):
+    pod = _pod(manifests, permissions)
+    for container in pod.spec.containers:
+        assert container.security_context.allow_privilege_escalation is False
+        assert container.security_context.capabilities.drop == ["ALL"]
+    assert pod.spec.security_context.run_as_non_root is True
+
+
+def test_both_containers_mount_only_the_workspace(manifests, permissions):
+    pod = _pod(manifests, permissions)
+    names = {c.name for c in pod.spec.containers}
+    assert names == {"code-server", "openhands"}
+    for container in pod.spec.containers:
+        assert {m.mount_path for m in container.volume_mounts} == {"/workspace"}
+
+
+def test_git_push_flag_is_communicated_to_the_workspace(manifests, permissions):
+    permissions.git.push = True
+    pod = _pod(manifests, permissions)
+    env = {e.name: e.value for e in pod.spec.containers[0].env if e.value is not None}
+    assert env["GIT_PUSH_ENABLED"] == "true"
+
+
+# --- secrets ----------------------------------------------------------------
+
+
+def test_secrets_are_injected_as_references_only(manifests, permissions):
+    from agentforge_shared.schemas import ResolvedSecret
+
+    permissions.secrets.enabled = True
+    pod = _pod(
+        manifests,
+        permissions,
+        secrets=[ResolvedSecret(env_var="GITHUB_TOKEN", secret_name="gh", key="token")],
     )
+    env = {e.name: e for e in pod.spec.containers[0].env}
+    assert "GITHUB_TOKEN" in env
+    source = env["GITHUB_TOKEN"].value_from.secret_key_ref
+    assert source.name == "gh"
+    assert source.key == "token"
+    # The value is resolved by the kubelet; AgentForge never sees it.
+    assert env["GITHUB_TOKEN"].value is None
+
+
+def test_secrets_are_withheld_when_the_policy_says_so(manifests, permissions):
+    from agentforge_shared.schemas import ResolvedSecret
+
+    assert permissions.secrets.enabled is False
+    pod = _pod(
+        manifests,
+        permissions,
+        secrets=[ResolvedSecret(env_var="GITHUB_TOKEN", secret_name="gh", key="token")],
+    )
+    assert "GITHUB_TOKEN" not in {e.name for e in pod.spec.containers[0].env}
+    assert pod._agentforge_warnings, "withholding a secret must not be silent"
+
+
+def test_required_secret_is_not_optional_in_the_reference(manifests, permissions):
+    from agentforge_shared.schemas import ResolvedSecret
+
+    permissions.secrets.enabled = True
+    pod = _pod(
+        manifests,
+        permissions,
+        secrets=[ResolvedSecret(env_var="DB_URL", secret_name="db", key="url", required=True)],
+    )
+    env = {e.name: e for e in pod.spec.containers[0].env}
+    assert env["DB_URL"].value_from.secret_key_ref.optional is False
+
+
+# --- network policy ---------------------------------------------------------
+
+
+def test_network_mode_none_denies_all_egress(manifests, permissions):
+    permissions.network.mode = "none"
+    policy = manifests.build_network_policy("af-demo-egress", "af-demo", permissions)
+    assert policy.spec.policy_types == ["Ingress", "Egress"]
+    assert policy.spec.egress == []
+
+
+def test_network_mode_restricted_allows_dns_and_https(manifests, permissions):
+    assert permissions.network.mode == "restricted"
+    policy = manifests.build_network_policy("af-demo-egress", "af-demo", permissions)
+    routes = policy.spec.egress
+    assert len(routes) == 2
+    ports = {p.port for p in routes[0].ports}
+    assert ports == {80, 443, 22}
+    assert {p.port for p in routes[1].ports} == {53}
+
+
+def test_network_mode_open_creates_no_policy(manifests, permissions):
+    permissions.network.mode = "open"
+    assert manifests.build_network_policy("af-demo-egress", "af-demo", permissions) is None
+
+
+def test_invalid_network_mode_is_rejected(manifests, permissions):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        permissions.network.mode = "whatever"
+
+
+# --- git bootstrap ----------------------------------------------------------
+
+
+def test_git_bootstrap_runs_as_the_workspace_uid(manifests, permissions):
+    pod = _pod(manifests, permissions, git_repository="https://github.com/example/demo")
     clone = next(c for c in pod.spec.init_containers if c.name == "git-clone")
     assert clone.security_context.run_as_user == 1000
+    assert clone.security_context.allow_privilege_escalation is False
     assert "git clone" in " ".join(clone.args)
 
 
-def test_no_init_container_without_a_repository(manifests):
-    pod = manifests.build_pod("af-x-ws", "af-x", image="img", pvc_name="af-x-workspace")
-    assert not pod.spec.init_containers
+def test_no_init_container_without_a_repository(manifests, permissions):
+    assert not _pod(manifests, permissions).spec.init_containers
 
 
 def test_pvc_requests_the_configured_storage(manifests):
@@ -57,3 +201,8 @@ def test_pvc_requests_the_configured_storage(manifests):
     assert pvc.spec.resources.requests == {"storage": "10Gi"}
     assert pvc.spec.storage_class_name == "local-path"
     assert pvc.spec.access_modes == ["ReadWriteOnce"]
+
+
+def test_service_exposes_both_containers(manifests):
+    service = manifests.build_service("af-x-ws", "af-x", {"http": 8080, "agent": 3000})
+    assert {p.name for p in service.spec.ports} == {"http", "agent"}

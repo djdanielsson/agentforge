@@ -160,8 +160,9 @@ class WebhookDispatcher:
 
     # --- bookkeeping -------------------------------------------------------
 
-    def _retry(self, delivery_id: str, attempts: int, *, error: str,
-               response_code: int | None = None) -> None:
+    def _retry(
+        self, delivery_id: str, attempts: int, *, error: str, response_code: int | None = None
+    ) -> None:
         next_attempt = (attempts + 1) * self.settings.webhook_retry_backoff_seconds
         give_up = attempts + 1 >= self.settings.webhook_max_attempts
         with session_scope() as session:
@@ -179,8 +180,14 @@ class WebhookDispatcher:
                 delivery.status = "pending"
                 delivery.next_attempt_at = datetime.now(UTC) + timedelta(seconds=next_attempt)
 
-    def _finish(self, delivery_id: str, *, status: str, response_code: int | None = None,
-                error: str | None = None) -> None:
+    def _finish(
+        self,
+        delivery_id: str,
+        *,
+        status: str,
+        response_code: int | None = None,
+        error: str | None = None,
+    ) -> None:
         with session_scope() as session:
             delivery = session.get(WebhookDelivery, delivery_id)
             if delivery is None:

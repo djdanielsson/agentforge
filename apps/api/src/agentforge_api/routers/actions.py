@@ -28,52 +28,109 @@ router = APIRouter(tags=["actions"])
 
 
 EVENT_CATALOG: list[EventTypeInfo] = [
-    EventTypeInfo(type="project.created", description="A project was registered.",
-                  payload_fields=["name", "repository_url"]),
-    EventTypeInfo(type="project.status", description="Project lifecycle changed.",
-                  payload_fields=["status"]),
-    EventTypeInfo(type="workspace.created", description="A workspace's k8s objects exist.",
-                  payload_fields=["namespace"]),
-    EventTypeInfo(type="workspace.ready", description="The workspace pod is Ready.",
-                  payload_fields=["code_server_url"]),
-    EventTypeInfo(type="workspace.destroyed", description="The workspace namespace was deleted.",
-                  payload_fields=["namespace"]),
-    EventTypeInfo(type="workspace.failed", description="Provisioning failed.",
-                  payload_fields=["error"]),
-    EventTypeInfo(type="agent.created", description="An agent was created.",
-                  payload_fields=["name", "model", "branch"]),
-    EventTypeInfo(type="agent.started", description="The agent runtime accepted the session.",
-                  payload_fields=["session_id"]),
-    EventTypeInfo(type="agent.progress", description="The agent made observable progress.",
-                  payload_fields=["message", "files_changed"]),
-    EventTypeInfo(type="agent.message", description="A conversational turn.",
-                  payload_fields=["role", "content"]),
-    EventTypeInfo(type="agent.waiting", description="The agent needs a human answer.",
-                  payload_fields=["question"]),
-    EventTypeInfo(type="agent.permission_required", description="The agent wants to run something.",
-                  payload_fields=["request_id", "command", "reason"]),
-    EventTypeInfo(type="agent.completed", description="The agent finished a task.",
-                  payload_fields=["task_id", "result"]),
-    EventTypeInfo(type="agent.failed", description="The agent errored.",
-                  payload_fields=["error"]),
-    EventTypeInfo(type="agent.stopped", description="The agent was stopped.",
-                  payload_fields=[]),
-    EventTypeInfo(type="permission.granted", description="A permission request was allowed.",
-                  payload_fields=["request_id", "decision"]),
-    EventTypeInfo(type="permission.denied", description="A permission request was denied.",
-                  payload_fields=["request_id"]),
-    EventTypeInfo(type="task.created", description="Work was queued.",
-                  payload_fields=["description", "kind", "priority"]),
-    EventTypeInfo(type="task.status", description="Task lifecycle changed.",
-                  payload_fields=["status", "result", "error"]),
-    EventTypeInfo(type="test.completed", description="A test run finished.",
-                  payload_fields=["passed", "failed", "command"]),
-    EventTypeInfo(type="review.completed", description="A review finished.",
-                  payload_fields=["branch", "files_changed", "summary"]),
-    EventTypeInfo(type="deploy.completed", description="A deployment finished.",
-                  payload_fields=["environment", "branch"]),
-    EventTypeInfo(type="commit.created", description="The agent committed code.",
-                  payload_fields=["commit", "branch"]),
+    EventTypeInfo(
+        type="project.created",
+        description="A project was registered.",
+        payload_fields=["name", "repository_url"],
+    ),
+    EventTypeInfo(
+        type="project.status", description="Project lifecycle changed.", payload_fields=["status"]
+    ),
+    EventTypeInfo(
+        type="workspace.created",
+        description="A workspace's k8s objects exist.",
+        payload_fields=["namespace"],
+    ),
+    EventTypeInfo(
+        type="workspace.ready",
+        description="The workspace pod is Ready.",
+        payload_fields=["code_server_url"],
+    ),
+    EventTypeInfo(
+        type="workspace.destroyed",
+        description="The workspace namespace was deleted.",
+        payload_fields=["namespace"],
+    ),
+    EventTypeInfo(
+        type="workspace.failed", description="Provisioning failed.", payload_fields=["error"]
+    ),
+    EventTypeInfo(
+        type="agent.created",
+        description="An agent was created.",
+        payload_fields=["name", "model", "branch"],
+    ),
+    EventTypeInfo(
+        type="agent.started",
+        description="The agent runtime accepted the session.",
+        payload_fields=["session_id"],
+    ),
+    EventTypeInfo(
+        type="agent.progress",
+        description="The agent made observable progress.",
+        payload_fields=["message", "files_changed"],
+    ),
+    EventTypeInfo(
+        type="agent.message",
+        description="A conversational turn.",
+        payload_fields=["role", "content"],
+    ),
+    EventTypeInfo(
+        type="agent.waiting",
+        description="The agent needs a human answer.",
+        payload_fields=["question"],
+    ),
+    EventTypeInfo(
+        type="agent.permission_required",
+        description="The agent wants to run something.",
+        payload_fields=["request_id", "command", "reason"],
+    ),
+    EventTypeInfo(
+        type="agent.completed",
+        description="The agent finished a task.",
+        payload_fields=["task_id", "result"],
+    ),
+    EventTypeInfo(type="agent.failed", description="The agent errored.", payload_fields=["error"]),
+    EventTypeInfo(type="agent.stopped", description="The agent was stopped.", payload_fields=[]),
+    EventTypeInfo(
+        type="permission.granted",
+        description="A permission request was allowed.",
+        payload_fields=["request_id", "decision"],
+    ),
+    EventTypeInfo(
+        type="permission.denied",
+        description="A permission request was denied.",
+        payload_fields=["request_id"],
+    ),
+    EventTypeInfo(
+        type="task.created",
+        description="Work was queued.",
+        payload_fields=["description", "kind", "priority"],
+    ),
+    EventTypeInfo(
+        type="task.status",
+        description="Task lifecycle changed.",
+        payload_fields=["status", "result", "error"],
+    ),
+    EventTypeInfo(
+        type="test.completed",
+        description="A test run finished.",
+        payload_fields=["passed", "failed", "command"],
+    ),
+    EventTypeInfo(
+        type="review.completed",
+        description="A review finished.",
+        payload_fields=["branch", "files_changed", "summary"],
+    ),
+    EventTypeInfo(
+        type="deploy.completed",
+        description="A deployment finished.",
+        payload_fields=["environment", "branch"],
+    ),
+    EventTypeInfo(
+        type="commit.created",
+        description="The agent committed code.",
+        payload_fields=["commit", "branch"],
+    ),
 ]
 
 
@@ -85,8 +142,15 @@ def _project(session, project_id: str, principal: Principal) -> Project:
     return project
 
 
-def _queue(session, project: Project, *, kind: TaskKind, description: str,
-           agent_id: str | None, payload: dict) -> Task:
+def _queue(
+    session,
+    project: Project,
+    *,
+    kind: TaskKind,
+    description: str,
+    agent_id: str | None,
+    payload: dict,
+) -> Task:
     """Shared tail of every semantic action."""
     if agent_id is None and project.agents:
         agent_id = project.agents[0].id
@@ -98,14 +162,35 @@ def _queue(session, project: Project, *, kind: TaskKind, description: str,
     return task
 
 
+@router.get("/providers")
+def list_providers() -> dict:
+    """Which workspace backends exist and what each can actually do.
+
+    Advertised from the providers themselves, so the UI disables a control the
+    selected backend cannot honour instead of offering it and failing later.
+    """
+    from agentforge_shared.config import get_settings
+    from agentforge_workspaces.providers import available_providers, get_provider
+
+    settings = get_settings()
+    descriptions = []
+    for name in available_providers():
+        try:
+            descriptions.append(get_provider(name).capabilities())
+        except Exception as exc:  # noqa: BLE001 - a backend may be unavailable here
+            descriptions.append({"provider": name, "available": False, "error": str(exc)[:200]})
+    return {"configured": settings.workspace_provider, "providers": descriptions}
+
+
 @router.get("/events/catalog", response_model=list[EventTypeInfo])
 def event_catalog() -> list[EventTypeInfo]:
     """Discover what a webhook can subscribe to."""
     return EVENT_CATALOG
 
 
-@router.post("/projects/{project_id}/review", response_model=TaskRead,
-             status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/projects/{project_id}/review", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED
+)
 def review(
     session: DbSession,
     project_id: str,
@@ -125,8 +210,9 @@ def review(
     )
 
 
-@router.post("/projects/{project_id}/test", response_model=TaskRead,
-             status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/projects/{project_id}/test", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED
+)
 def test(
     session: DbSession,
     project_id: str,
@@ -147,8 +233,9 @@ def test(
     )
 
 
-@router.post("/projects/{project_id}/deploy", response_model=TaskRead,
-             status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/projects/{project_id}/deploy", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED
+)
 def deploy(
     session: DbSession,
     project_id: str,
@@ -169,8 +256,9 @@ def deploy(
 
 
 @router.get("/agents/{agent_id}/summary", response_model=AgentSummary)
-def agent_summary(session: DbSession, agent_id: str,
-                  principal: Principal = Depends(require_write)) -> AgentSummary:
+def agent_summary(
+    session: DbSession, agent_id: str, principal: Principal = Depends(require_write)
+) -> AgentSummary:
     """One call that answers: what is this agent doing, and is it stuck?
 
     This is the endpoint a conversational interface polls or is pushed to.
@@ -215,7 +303,9 @@ def agent_summary(session: DbSession, agent_id: str,
         .order_by(Event.created_at.desc())
         .limit(1)
     ).first()
-    files_changed = int((last_commit_event.payload or {}).get("files_changed", 0)) if last_commit_event else 0
+    files_changed = (
+        int((last_commit_event.payload or {}).get("files_changed", 0)) if last_commit_event else 0
+    )
 
     blocked_reason = None
     question = None

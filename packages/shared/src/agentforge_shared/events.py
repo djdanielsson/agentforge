@@ -61,7 +61,7 @@ def matches(event_type: str, patterns: list[str] | None) -> bool:
     if not patterns:
         return False
     for pattern in patterns:
-        if pattern == EVENT_WILDCARD or pattern == event_type:
+        if pattern in (EVENT_WILDCARD, event_type):
             return True
         if pattern.endswith(".*") and event_type.startswith(pattern[:-1]):
             return True

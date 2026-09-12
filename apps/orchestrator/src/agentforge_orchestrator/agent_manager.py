@@ -144,19 +144,18 @@ class AgentManager:
     # --- helpers ----------------------------------------------------------
 
     def _ensure_session(self, agent: Agent, workspace: Workspace) -> str:
-        if agent.current_task_id and agent.permissions.get("session_id"):
-            return agent.permissions["session_id"]
+        """Start the OpenHands session once, then reuse it for every task."""
+        if agent.session_id:
+            return agent.session_id
         started = self.client.start_agent(
             agent_id=agent.id,
-            workspace_url=workspace.code_server_url or "",
+            workspace_url=workspace.agent_server_url or workspace.code_server_url or "",
             model=agent.model,
         )
         session_id = started.get("session_id") or started.get("id") or agent.id
         with session_scope() as session:
-            row = session.get(Agent, agent.id)
-            perms = dict(row.permissions or {})
-            perms["session_id"] = session_id
-            row.permissions = perms
+            session.get(Agent, agent.id).session_id = session_id
+        self._event(agent, EventType.AGENT_STARTED, payload={"session_id": session_id})
         return session_id
 
     def _commit_if_dirty(self, agent: Agent, workspace: Workspace, task: Task) -> list[str]:
@@ -203,13 +202,12 @@ class AgentManager:
                 agent.current_task_id = current_task_id
             if error is not None:
                 agent.error = error
-            session.add(
-                Event(
-                    type=str(EventType.AGENT_STATUS),
-                    project_id=agent.project_id,
-                    agent_id=agent.id,
-                    payload={"status": str(status)},
-                )
+            record_event(
+                session,
+                type=EventType.AGENT_STATUS,
+                project_id=agent.project_id,
+                agent_id=agent.id,
+                payload={"status": str(status)},
             )
 
     def _append_message(self, agent_id: str, role: str, content: str) -> None:
@@ -230,14 +228,13 @@ class AgentManager:
         payload: dict | None = None,
     ) -> None:
         with session_scope() as session:
-            session.add(
-                Event(
-                    type=str(type_),
-                    project_id=agent.project_id,
-                    agent_id=agent.id,
-                    task_id=task.id if task else None,
-                    payload=payload or {},
-                )
+            record_event(
+                session,
+                type=type_,
+                project_id=agent.project_id,
+                agent_id=agent.id,
+                task_id=task.id if task else None,
+                payload=payload or {},
             )
 
 

@@ -21,13 +21,7 @@ def _is_internal(address: str) -> bool:
         ip = ipaddress.ip_address(address)
     except ValueError:
         return False
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-    )
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
 
 
 def validate_webhook_url(url: str) -> str:
@@ -44,9 +38,7 @@ def validate_webhook_url(url: str) -> str:
 
     settings = get_settings()
     if parsed.hostname in settings.webhook_deny_hosts:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "webhook host is not permitted"
-        )
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "webhook host is not permitted")
 
     # Resolve and refuse internal addresses. Note this is best-effort: a DNS
     # record can change between this check and the request (TOCTOU), so a

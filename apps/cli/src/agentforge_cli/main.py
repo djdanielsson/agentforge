@@ -1,15 +1,16 @@
 """`aiw` — talk to the AgentForge control plane.
 
-    aiw projects
-    aiw ask ComplianceFlow "Fix the authentication bug"
-    aiw fleet
-    aiw watch ComplianceFlow
+aiw projects
+aiw ask ComplianceFlow "Fix the authentication bug"
+aiw fleet
+aiw watch ComplianceFlow
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -76,7 +77,9 @@ def cmd_agents(client: WorkbenchClient, args) -> int:
         print(f"{project['name']}: no agents")
         return 0
     for agent in agents:
-        print(f"  {dot(agent['status'])} {agent['name']:<20} {agent['model']:<12} {agent['branch']}")
+        print(
+            f"  {dot(agent['status'])} {agent['name']:<20} {agent['model']:<12} {agent['branch']}"
+        )
     return 0
 
 
@@ -98,8 +101,10 @@ def cmd_fleet(client: WorkbenchClient, args) -> int:
         return 0
     for project, agent, summary in rows:
         print(f"{project['name']} / {agent['name']}")
-        print(f"  {dot(summary['status'])} {summary['status']}"
-              + (f" — {summary['task']}" if summary["task"] else ""))
+        print(
+            f"  {dot(summary['status'])} {summary['status']}"
+            + (f" — {summary['task']}" if summary["task"] else "")
+        )
         if summary.get("progress"):
             print(f"    progress: {summary['progress']}")
         if summary.get("blocked_reason"):
@@ -108,7 +113,9 @@ def cmd_fleet(client: WorkbenchClient, args) -> int:
             print(f"    ? {summary['question']}")
         if summary.get("tests"):
             tests = summary["tests"]
-            print(f"    tests: {tests.get('passed', '?')} passed, {tests.get('failed', '?')} failed")
+            print(
+                f"    tests: {tests.get('passed', '?')} passed, {tests.get('failed', '?')} failed"
+            )
         if summary.get("commits"):
             print(f"    commits: {', '.join(c[:8] for c in summary['commits'])}")
         print()
@@ -160,7 +167,10 @@ def cmd_tasks(client: WorkbenchClient, args) -> int:
         print(f"{project['name']}: no tasks")
         return 0
     for task in tasks:
-        print(f"  {dot(task['status'])} #{task['position']:<3} {task['kind']:<9} {task['description'][:70]}")
+        print(
+            f"  {dot(task['status'])} #{task['position']:<3} "
+            f"{task['kind']:<9} {task['description'][:70]}"
+        )
     return 0
 
 
@@ -203,8 +213,10 @@ async def _tail(url: str) -> None:
     async with websockets.connect(url) as socket:
         async for raw in socket:
             event = json.loads(raw)
-            print(f"[{event.get('created_at', '')}] {event['type']} "
-                  f"{json.dumps(event.get('payload', {}))[:160]}")
+            print(
+                f"[{event.get('created_at', '')}] {event['type']} "
+                f"{json.dumps(event.get('payload', {}))[:160]}"
+            )
 
 
 def cmd_watch(client: WorkbenchClient, args) -> int:
@@ -212,10 +224,8 @@ def cmd_watch(client: WorkbenchClient, args) -> int:
     base = client.base_url.replace("http://", "ws://").replace("https://", "wss://")
     url = f"{base}/projects/{project['id']}/events"
     print(f"watching {project['name']} ({url}) — ctrl-c to stop")
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(_tail(url))
-    except KeyboardInterrupt:
-        pass
     return 0
 
 
@@ -223,12 +233,19 @@ def cmd_watch(client: WorkbenchClient, args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aiw", description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--url", default=os.environ.get("AGENTFORGE_API_URL"),
-                        help="control plane base url (default $AGENTFORGE_API_URL or localhost)")
-    parser.add_argument("--key", default=os.environ.get("AGENTFORGE_API_KEY"),
-                        help="api key (default $AGENTFORGE_API_KEY)")
+    parser = argparse.ArgumentParser(
+        prog="aiw", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--url",
+        default=os.environ.get("AGENTFORGE_API_URL"),
+        help="control plane base url (default $AGENTFORGE_API_URL or localhost)",
+    )
+    parser.add_argument(
+        "--key",
+        default=os.environ.get("AGENTFORGE_API_KEY"),
+        help="api key (default $AGENTFORGE_API_KEY)",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     sub = parser.add_subparsers(dest="command", required=True)
 

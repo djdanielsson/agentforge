@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .enums import (
     AgentStatus,
-    PermissionDecision,
     Priority,
     ProjectStatus,
     TaskKind,
@@ -49,8 +48,10 @@ class WorkspaceRead(ORMModel):
     pod_name: str | None = None
     service_name: str | None = None
     status: WorkspaceStatus
+    provider: str = "kubernetes"
     image: str | None = None
     code_server_url: str | None = None
+    agent_server_url: str | None = None
     error: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -81,6 +82,8 @@ class AgentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     model: str | None = None
     branch: str | None = None
+    #: Omit to get the restrictive default policy.
+    policy: dict[str, Any] | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -88,6 +91,7 @@ class AgentUpdate(BaseModel):
     model: str | None = None
     branch: str | None = None
     status: AgentStatus | None = None
+    policy: dict[str, Any] | None = None
 
 
 class AgentRead(ORMModel):
@@ -99,6 +103,8 @@ class AgentRead(ORMModel):
     branch: str | None = None
     status: AgentStatus
     current_task_id: str | None = None
+    policy: dict[str, Any] = Field(default_factory=dict)
+    session_id: str | None = None
     error: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -133,7 +139,7 @@ class TaskCreate(BaseModel):
     branch: str | None = None
 
     @model_validator(mode="after")
-    def _require_text(self) -> "TaskCreate":
+    def _require_text(self) -> TaskCreate:
         if not (self.prompt or self.description or "").strip():
             raise ValueError("either `prompt` or `description` is required")
         return self
@@ -258,7 +264,7 @@ class WebhookCreate(BaseModel):
     description: str | None = None
     events: list[str] = Field(default_factory=lambda: ["*"])
     project_id: str | None = None
-    secret: str | None = None   # generated when omitted
+    secret: str | None = None  # generated when omitted
 
 
 class WebhookUpdate(BaseModel):
@@ -324,3 +330,71 @@ class EventTypeInfo(BaseModel):
     type: str
     description: str
     payload_fields: list[str] = Field(default_factory=list)
+
+
+# --- secret references ------------------------------------------------------
+
+
+class SecretRefCreate(BaseModel):
+    """Register a pointer to a credential.
+
+    Note there is no `value` field. The secret itself must already exist in the
+    workspace provider's secret store; this only says where to find it and what
+    env var it should become.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    scope: str = Field(default="project", pattern="^(global|project|agent)$")
+    secret_name: str = Field(min_length=1, max_length=253)
+    key: str = Field(min_length=1, max_length=253)
+    env_var: str = Field(min_length=1, max_length=253, pattern="^[A-Z][A-Z0-9_]*$")
+    provider: str = Field(default="kubernetes", pattern="^(kubernetes|podman|external)$")
+    required: bool = False
+    description: str | None = None
+    project_id: str | None = None
+    agent_id: str | None = None
+
+
+class SecretRefRead(ORMModel):
+    id: str
+    name: str
+    scope: str
+    project_id: str | None = None
+    agent_id: str | None = None
+    provider: str
+    secret_name: str
+    key: str
+    env_var: str
+    required: bool
+    description: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ResolvedSecret(BaseModel):
+    """What the provider actually receives. Still no value."""
+
+    env_var: str
+    secret_name: str
+    key: str
+    required: bool = False
+
+
+# --- permissions ------------------------------------------------------------
+
+
+class PermissionsRead(BaseModel):
+    """The effective policy, with the defaults filled in."""
+
+    agent_id: str
+    policy: dict[str, Any]
+
+
+# --- workspace lifecycle ----------------------------------------------------
+
+
+class WorkspaceActionAccepted(BaseModel):
+    project_id: str
+    action: str
+    status: str
+    detail: str | None = None

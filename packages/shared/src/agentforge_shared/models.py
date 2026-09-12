@@ -67,8 +67,10 @@ class Workspace(TimestampMixin, Base):
     pod_name: Mapped[str | None] = mapped_column(String(200))
     service_name: Mapped[str | None] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(32), default=WorkspaceStatus.PENDING)
+    provider: Mapped[str] = mapped_column(String(32), default="kubernetes")
     image: Mapped[str | None] = mapped_column(String(300))
     code_server_url: Mapped[str | None] = mapped_column(String(500))
+    agent_server_url: Mapped[str | None] = mapped_column(String(500))
     error: Mapped[str | None] = mapped_column(Text)
     resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
@@ -91,7 +93,12 @@ class Agent(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), default=AgentStatus.STARTING)
     current_task_id: Mapped[str | None] = mapped_column(String(36))
     conversation: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    #: The AgentPermissions policy. Enforced by the workspace provider.
+    policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    #: Human decisions on permission requests: request_id -> decision.
     permissions: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    #: The OpenHands Agent Server session backing this agent, once started.
+    session_id: Mapped[str | None] = mapped_column(String(200))
     error: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="agents")
@@ -156,7 +163,7 @@ class ApiKey(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    prefix: Mapped[str] = mapped_column(String(16), index=True)   # for lookup
+    prefix: Mapped[str] = mapped_column(String(16), index=True)  # for lookup
     key_hash: Mapped[str] = mapped_column(String(128), unique=True)
     scopes: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["read", "write"])
     project_id: Mapped[str | None] = mapped_column(String(36), index=True)
@@ -174,7 +181,7 @@ class Webhook(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     url: Mapped[str] = mapped_column(String(1000), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    secret: Mapped[str] = mapped_column(String(200))              # HMAC-SHA256 signing key
+    secret: Mapped[str] = mapped_column(String(200))  # HMAC-SHA256 signing key
     events: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["*"])
     project_id: Mapped[str | None] = mapped_column(String(36), index=True)
     active: Mapped[bool] = mapped_column(default=True)
@@ -201,3 +208,37 @@ class WebhookDelivery(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SecretRef(Base):
+    """A pointer to a credential, never the credential itself.
+
+    The value lives in the workspace provider's own secret store (a Kubernetes
+    Secret, a Podman secret). AgentForge stores only where to find it and which
+    environment variable it should become. There is deliberately no column that
+    can hold a secret value, so the API cannot leak one even by accident.
+    """
+
+    __tablename__ = "secret_refs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    #: global | project | agent
+    scope: Mapped[str] = mapped_column(String(16), default="project", index=True)
+    project_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    agent_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    #: Which workspace provider owns this secret: kubernetes | podman | external
+    provider: Mapped[str] = mapped_column(String(32), default="kubernetes")
+    #: The provider-native object name, e.g. the Kubernetes Secret's name.
+    secret_name: Mapped[str] = mapped_column(String(253), nullable=False)
+    #: The key inside that object.
+    key: Mapped[str] = mapped_column(String(253), nullable=False)
+    #: The environment variable it becomes inside the workspace.
+    env_var: Mapped[str] = mapped_column(String(253), nullable=False)
+    #: When false and the secret is missing, provisioning continues without it.
+    required: Mapped[bool] = mapped_column(default=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

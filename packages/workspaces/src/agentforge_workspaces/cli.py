@@ -1,9 +1,10 @@
-"""Tiny CLI for poking at workspaces without the rest of the stack.
+"""Workspace provider CLI, for poking at one workspace without the stack.
 
-uv run --package agentforge-workspaces python -m agentforge_workspaces.cli provision aiw-demo
-uv run ... status aiw-demo
-uv run ... exec aiw-demo -- git -C /workspace status
-uv run ... teardown aiw-demo
+agentforge-workspaces providers
+agentforge-workspaces provision af-demo me/demo --repo https://github.com/example/demo
+agentforge-workspaces status af-demo
+agentforge-workspaces exec af-demo -- git -C /workspace status
+agentforge-workspaces destroy af-demo
 """
 
 from __future__ import annotations
@@ -13,29 +14,37 @@ import json
 import logging
 import sys
 
-from .controller import WorkspaceController, exec_in_workspace
+from agentforge_shared.config import get_settings
+
+from .providers import WorkspaceSpec, available_providers, get_provider
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aiw-workspace", description=__doc__)
+    parser = argparse.ArgumentParser(prog="agentforge-workspaces", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--provider", default=None, help="kubernetes | podman | local")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("provision", help="create namespace/pvc/pod for a workspace")
-    p.add_argument("namespace")
+    sub.add_parser("providers", help="list providers and their capabilities")
+
+    p = sub.add_parser("provision", help="create a workspace")
+    p.add_argument("reference")
     p.add_argument("--repo")
     p.add_argument("--revision", default="main")
-    p.add_argument("--no-wait", action="store_true")
+    p.add_argument("--wait", action="store_true", help="block until the pod is ready")
 
-    p = sub.add_parser("status", help="show pod status")
-    p.add_argument("namespace")
+    p = sub.add_parser("status", help="show workspace state")
+    p.add_argument("reference")
 
-    p = sub.add_parser("exec", help="run a command inside the workspace pod")
-    p.add_argument("namespace")
+    p = sub.add_parser("exec", help="run a command inside the workspace")
+    p.add_argument("reference")
     p.add_argument("cmd", nargs=argparse.REMAINDER)
 
-    p = sub.add_parser("teardown", help="delete the workspace namespace")
-    p.add_argument("namespace")
+    p = sub.add_parser("stop", help="stop without destroying")
+    p.add_argument("reference")
+
+    p = sub.add_parser("destroy", help="delete the workspace and its volume")
+    p.add_argument("reference")
 
     return parser
 
@@ -46,34 +55,57 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
-    controller = WorkspaceController()
+    settings = get_settings()
+    provider_name = args.provider or settings.workspace_provider
+    provider = get_provider(provider_name)
+
+    if args.command == "providers":
+        print(f"configured: {provider_name}\n")
+        for name in available_providers():
+            instance = get_provider(name)
+            print(f"{name}: {json.dumps(instance.capabilities())}")
+        return 0
 
     if args.command == "provision":
-        info = controller.provision(
-            namespace=args.namespace,
+        spec = WorkspaceSpec(
+            project_id=args.reference,
+            slug=args.reference.removeprefix(f"{settings.workspace_namespace_prefix}-"),
+            name=args.reference,
+            reference=args.reference,
             repository_url=args.repo,
             revision=args.revision,
-            wait=not args.no_wait,
+            image=settings.workspace_image,
+            agent_image=settings.workspace_agent_image,
+            storage=settings.workspace_storage,
+            storage_class=settings.workspace_storage_class,
+            code_server_port=settings.workspace_code_server_port,
         )
-        print(json.dumps(info.__dict__, indent=2))
-        return 0 if info.ready or args.no_wait else 1
+        state = provider.create(spec)
+        if args.wait and hasattr(provider, "wait_ready"):
+            state = provider.wait_ready(args.reference)
+        print(json.dumps(state.__dict__, indent=2, default=str))
+        return 0
 
     if args.command == "status":
-        pod = f"{args.namespace}-ws"
-        print(json.dumps(controller.status(args.namespace, pod), indent=2))
+        print(json.dumps(provider.get_status(args.reference).__dict__, indent=2, default=str))
         return 0
 
     if args.command == "exec":
-        cmd = [c for c in args.cmd if c != "--"]
-        if not cmd:
+        command = [c for c in args.cmd if c != "--"]
+        if not command:
             print("nothing to exec", file=sys.stderr)
             return 2
-        print(exec_in_workspace(args.namespace, f"{args.namespace}-ws", cmd))
+        print(provider.exec(args.reference, command))
         return 0
 
-    if args.command == "teardown":
-        controller.teardown(args.namespace)
-        print(f"teardown requested for {args.namespace}")
+    if args.command == "stop":
+        provider.stop(args.reference)
+        print(f"stopped {args.reference}")
+        return 0
+
+    if args.command == "destroy":
+        provider.destroy(args.reference)
+        print(f"destroyed {args.reference}")
         return 0
 
     return 2

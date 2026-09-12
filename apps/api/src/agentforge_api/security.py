@@ -96,9 +96,7 @@ def authenticate(session: Session, token: str | None) -> ApiKey | None:
     return candidate
 
 
-def get_principal(
-    request: Request, session: Session = Depends(get_session)
-) -> Principal:
+def get_principal(request: Request, session: Session = Depends(get_session)) -> Principal:
     settings = get_settings()
     if not settings.auth_enabled:
         return Principal()

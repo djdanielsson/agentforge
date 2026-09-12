@@ -21,7 +21,18 @@ from agentforge_shared.db import SessionLocal, init_db
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import actions, agents, git, health, keys, projects, stream, tasks, webhooks
+from .routers import (
+    actions,
+    agents,
+    git,
+    health,
+    keys,
+    projects,
+    secrets,
+    stream,
+    tasks,
+    webhooks,
+)
 from .security import ensure_bootstrap_key
 
 log = logging.getLogger(__name__)
@@ -69,7 +80,18 @@ def create_app() -> FastAPI:
     )
 
     v1 = APIRouter(prefix=API_PREFIX)
-    for module in (health, projects, agents, tasks, actions, git, keys, webhooks, stream):
+    for module in (
+        health,
+        projects,
+        agents,
+        tasks,
+        actions,
+        git,
+        keys,
+        secrets,
+        webhooks,
+        stream,
+    ):
         v1.include_router(module.router)
     app.include_router(v1)
 

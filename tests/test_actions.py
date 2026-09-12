@@ -32,9 +32,7 @@ def test_test_endpoint_defaults_to_the_project_test_command(client):
 def test_test_endpoint_accepts_an_explicit_command(client):
     project, _ = _project_with_agent(client, "CustomTest")
 
-    task = client.post(
-        f"{API}/projects/{project['id']}/test", json={"command": "pytest -q"}
-    ).json()
+    task = client.post(f"{API}/projects/{project['id']}/test", json={"command": "pytest -q"}).json()
     assert "pytest -q" in task["description"]
 
 

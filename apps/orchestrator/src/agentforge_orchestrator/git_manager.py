@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from agentforge_workspaces.controller import exec_in_workspace
+from agentforge_workspaces.providers.kubernetes import exec_in_workspace
 
 log = logging.getLogger(__name__)
 

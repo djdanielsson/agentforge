@@ -22,6 +22,12 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency injection is expressed as a call in an argument default,
+# which is exactly what B008 warns about. It is the framework's idiom.
+"apps/api/src/agentforge_api/routers/*.py" = ["B008"]
+"apps/api/src/agentforge_api/security.py" = ["B008"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["packages/shared/src", "apps/api/src", "apps/orchestrator/src", "packages/workspaces/src", "apps/cli/src"]
