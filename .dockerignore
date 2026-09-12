@@ -1,0 +1,22 @@
+# Everything not needed to build. The build context is the repository root for
+# all three images, so this keeps the context small and the layers cacheable.
+
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/dist
+**/.pytest_cache
+**/.ruff_cache
+docs
+deploy
+k8s
+tests
+*.md
+!apps/**/*.md
+*.db
+.env
+.env.*
+.ghtoken
