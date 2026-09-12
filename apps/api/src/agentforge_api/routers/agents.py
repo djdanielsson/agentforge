@@ -40,7 +40,10 @@ def get_agent(session: DbSession, agent_id: str) -> Agent:
 
 @router.patch("/{agent_id}", response_model=AgentRead)
 def update_agent(session: DbSession, agent_id: str, payload: AgentUpdate) -> Agent:
+    from ..model_catalog import validate_model
+
     agent = _get_agent(session, agent_id)
+    validate_model(payload.model)
     for field, value in payload.model_dump(exclude_unset=True, exclude_none=True).items():
         setattr(agent, field, value)
     session.commit()

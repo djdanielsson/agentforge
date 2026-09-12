@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
+import pytest
+
 API = "/api/v1"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_model_catalog():
+    """The catalog caches its answer; a cached list would leak between tests."""
+    from agentforge_api import model_catalog
+
+    model_catalog._cache = None
+    yield
+    model_catalog._cache = None
 
 
 def make_project(client, name: str = "ComplianceFlow", repo: str | None = None):
@@ -98,6 +110,34 @@ class _FakeGatewayResponse:
         return self._payload
 
 
+def _gateway_serves(monkeypatch, *aliases: str, api_key: str | None = None) -> dict:
+    """Make the model catalog see a gateway serving exactly these aliases."""
+    import types
+
+    from agentforge_api import model_catalog
+
+    seen: dict = {}
+    payload = {"data": [{"id": alias} for alias in aliases]}
+
+    def fake_get(url, timeout, headers=None):
+        seen["url"] = url
+        seen["headers"] = headers
+        return _FakeGatewayResponse(payload)
+
+    monkeypatch.setattr(model_catalog.httpx, "get", fake_get)
+    monkeypatch.setattr(
+        model_catalog,
+        "get_settings",
+        lambda: types.SimpleNamespace(
+            llm_gateway_url="http://gateway:4000",
+            llm_gateway_api_key=api_key,
+            default_agent_model="local-coder",
+            model_aliases=["local-coder", "fast", "smart"],
+        ),
+    )
+    return seen
+
+
 def test_model_aliases_fall_back_to_config_without_a_gateway(client):
     """No LiteLLM in this deployment: the picker still offers something."""
     body = client.get(f"{API}/models").json()
@@ -109,48 +149,70 @@ def test_model_aliases_fall_back_to_config_without_a_gateway(client):
 
 def test_model_aliases_come_from_the_gateway_when_it_answers(client, monkeypatch):
     """The gateway decides what aliases exist; settings are only a fallback."""
-    from agentforge_api.routers import models as models_router
-
-    payload = {"data": [{"id": "smart"}, {"id": "local-coder"}]}
-    monkeypatch.setattr(
-        models_router.httpx,
-        "get",
-        lambda url, timeout, headers=None: _FakeGatewayResponse(payload),
-    )
+    _gateway_serves(monkeypatch, "smart", "local-coder")
 
     body = client.get(f"{API}/models").json()
+
     assert body["source"] == "gateway"
     assert body["models"] == ["smart", "local-coder"]
 
 
 def test_the_gateway_probe_presents_the_configured_key(client, monkeypatch):
     """A gateway that authenticates its callers must still be asked for aliases."""
-    import types
+    seen = _gateway_serves(monkeypatch, "smart", api_key="sk-test")
 
-    from agentforge_api.routers import models as models_router
+    client.get(f"{API}/models")
 
-    seen: dict = {}
+    assert seen["headers"] == {"Authorization": "Bearer sk-test"}
 
-    def fake_get(url, timeout, headers=None):
-        seen["headers"] = headers
-        return _FakeGatewayResponse({"data": [{"id": "smart"}]})
 
-    monkeypatch.setattr(models_router.httpx, "get", fake_get)
-    monkeypatch.setattr(
-        models_router,
-        "get_settings",
-        lambda: types.SimpleNamespace(
-            llm_gateway_url="http://gateway:4000",
-            llm_gateway_api_key="sk-test",
-            default_agent_model="local-coder",
-            model_aliases=["local-coder"],
-        ),
+def test_an_unknown_model_is_refused_when_the_agent_is_created(client):
+    """A typo in an alias must fail here, not at dispatch time."""
+    project = make_project(client, "BadModel")
+
+    resp = client.post(
+        f"{API}/projects/{project['id']}/agents",
+        json={"name": "Builder", "model": "gpt-9-turbo"},
     )
 
-    body = client.get(f"{API}/models").json()
+    assert resp.status_code == 422, resp.text
+    body = resp.json()["detail"]
+    assert "unknown model alias" in body["message"]
+    assert body["models"] == ["local-coder", "fast", "smart"]
 
-    assert body["source"] == "gateway"
-    assert seen["headers"] == {"Authorization": "Bearer sk-test"}
+
+def test_validation_follows_the_gateway_rather_than_the_config(client, monkeypatch):
+    """When the gateway answers, its list is the one that counts."""
+    _gateway_serves(monkeypatch, "smart")
+    project = make_project(client, "GatewayModels")
+
+    refused = client.post(
+        f"{API}/projects/{project['id']}/agents",
+        json={"name": "Builder", "model": "local-coder"},
+    )
+    accepted = client.post(
+        f"{API}/projects/{project['id']}/agents",
+        json={"name": "Builder", "model": "smart"},
+    )
+
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["source"] == "gateway"
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["model"] == "smart"
+
+
+def test_an_unknown_model_is_refused_when_the_agent_is_updated(client, monkeypatch):
+    """Editing an agent's model is the other way a bad alias could get in."""
+    _gateway_serves(monkeypatch, "smart", "local-coder")
+    project = make_project(client, "EditModel")
+    agent = client.post(f"{API}/projects/{project['id']}/agents", json={"name": "Builder"}).json()
+
+    refused = client.patch(f"{API}/agents/{agent['id']}", json={"model": "gpt-9-turbo"})
+    accepted = client.patch(f"{API}/agents/{agent['id']}", json={"model": "smart"})
+
+    assert refused.status_code == 422
+    assert accepted.status_code == 200
+    assert accepted.json()["model"] == "smart"
 
 
 def test_task_lifecycle_queues_work(client):

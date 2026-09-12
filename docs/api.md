@@ -67,6 +67,16 @@ dashboard's model picker always has something to offer:
 {"models": ["local-coder", "fast", "smart"], "source": "config", "default": "local-coder"}
 ```
 
+The same list is enforced, not merely advertised: creating an agent (or changing
+its model) with an alias the gateway does not serve is refused with a `422` that
+carries the valid ones, so a typo fails where it was typed instead of when a task
+is dispatched.
+
+```json
+{"detail": {"message": "unknown model alias 'gpt-9-turbo'",
+            "source": "gateway", "models": ["local-coder", "fast", "smart"]}}
+```
+
 `GET /api/v1/providers` advertises what each backend can honour, so a client can
 disable a control a provider cannot implement:
 

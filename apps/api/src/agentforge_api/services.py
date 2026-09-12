@@ -79,6 +79,12 @@ def create_project(session: Session, payload: ProjectCreate) -> Project:
 
 
 def create_agent(session: Session, project: Project, payload: AgentCreate) -> Agent:
+    from .model_catalog import validate_model
+
+    # The alias has to be one the gateway serves: a typo here would otherwise sit
+    # in the database until a task failed at dispatch.
+    validate_model(payload.model)
+
     default_model = (project.settings or {}).get("default_model", "local-coder")
     # An unspecified policy means the restrictive default, never "no policy".
     policy = (

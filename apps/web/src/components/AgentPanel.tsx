@@ -71,17 +71,21 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
     },
   });
 
+  // Valid aliases, straight from the API — the same list it validates writes
+  // against, so the picker cannot offer something the server would refuse.
+  const modelOptions = models.data?.models ?? [];
+
+  useEffect(() => {
+    if (!newModel && models.data) {
+      setNewModel(models.data.default ?? models.data.models[0] ?? "");
+    }
+  }, [models.data, newModel]);
+
   const pendingModel = modelDraft.trim();
   const modelChanged = Boolean(pendingModel) && pendingModel !== selected?.model;
 
   return (
     <div className="flex h-full">
-      <datalist id="model-aliases">
-        {(models.data?.models ?? []).map((alias) => (
-          <option key={alias} value={alias} />
-        ))}
-      </datalist>
-
       <div className="flex w-56 shrink-0 flex-col border-r border-surface-border">
         <div className="flex-1 overflow-y-auto p-2">
           {agents.length === 0 && (
@@ -116,14 +120,20 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
             placeholder="+ agent name"
             className="w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-surface-border focus:ring-neutral-600"
           />
-          <input
+          <select
             value={newModel}
             onChange={(e) => setNewModel(e.target.value)}
-            list="model-aliases"
-            placeholder={`model: ${models.data?.default ?? "default"}`}
-            title="Logical model alias, e.g. local-coder"
-            className="w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-surface-border focus:ring-neutral-600"
-          />
+            disabled={modelOptions.length === 0}
+            title="The model gateway resolves this alias to a real model"
+            className="w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-surface-border focus:ring-neutral-600 disabled:opacity-50"
+          >
+            {modelOptions.length === 0 && <option value="">no models available</option>}
+            {modelOptions.map((alias) => (
+              <option key={alias} value={alias}>
+                {alias}
+              </option>
+            ))}
+          </select>
         </form>
       </div>
 
@@ -143,14 +153,25 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
                 <label className="text-neutral-600" htmlFor="agent-model">
                   model:
                 </label>
-                <input
+                <select
                   id="agent-model"
-                  list="model-aliases"
                   value={modelDraft}
                   onChange={(e) => setModelDraft(e.target.value)}
+                  disabled={modelOptions.length === 0}
                   title="Applies to the agent's next session — restart to pick it up now."
-                  className="w-36 rounded bg-neutral-900 px-1.5 py-0.5 text-neutral-200 outline-none ring-1 ring-surface-border focus:ring-neutral-600"
-                />
+                  className="rounded bg-neutral-900 px-1.5 py-0.5 text-neutral-200 outline-none ring-1 ring-surface-border focus:ring-neutral-600 disabled:opacity-50"
+                >
+                  {/* An alias the gateway has since dropped stays visible rather
+                      than being silently rewritten to something else. */}
+                  {modelDraft && !modelOptions.includes(modelDraft) && (
+                    <option value={modelDraft}>{modelDraft} — not served</option>
+                  )}
+                  {modelOptions.map((alias) => (
+                    <option key={alias} value={alias}>
+                      {alias}
+                    </option>
+                  ))}
+                </select>
                 {modelChanged && (
                   <button
                     type="submit"
