@@ -25,6 +25,31 @@ spec:
         {{- include "agentforge.labels" . | nindent 8 }}
         app.kubernetes.io/component: ollama
     spec:
+      initContainers:
+        # Pull the model once, into the volume the main container then serves
+        # from. Kubernetes re-runs an init container on every pod start, but a
+        # model already in the volume makes this a fast no-op.
+        - name: pull-model
+          image: "{{ .Values.llm.ollama.image.repository }}:{{ .Values.llm.ollama.image.tag }}"
+          imagePullPolicy: {{ .Values.llm.ollama.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              ollama serve &
+              server=$!
+              for _ in $(seq 1 60); do
+                if ollama list >/dev/null 2>&1; then break; fi
+                sleep 2
+              done
+              ollama pull {{ .Values.llm.ollama.model }}
+              kill "$server"
+          env:
+            - name: OLLAMA_MODELS
+              value: /models
+          volumeMounts:
+            - name: models
+              mountPath: /models
       containers:
         - name: ollama
           image: "{{ .Values.llm.ollama.image.repository }}:{{ .Values.llm.ollama.image.tag }}"
