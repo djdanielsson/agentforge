@@ -329,3 +329,19 @@ ingress:
 
   # e.g. [{ secretName: agentforge-tls }]
   tls: []
+
+# ---------------------------------------------------------------------------
+# Tailnet access (Tailscale Kubernetes operator)
+# ---------------------------------------------------------------------------
+# Separate from `ingress` above because the operator wants a different shape:
+# it derives the MagicDNS hostname from the namespace and the object name and
+# provisions the certificate itself, so there is no host or TLS material to set
+# here. Once enabled the app answers at
+# https://<namespace>-<name>-ingress.<tailnet>.ts.net.
+tailscaleIngress:
+  enabled: false
+  name: agentforge-ts
+
+  # e.g. {tailscale.com/proxy-group: ingress-proxies} to serve through a
+  # ProxyGroup instead of a dedicated per-Ingress proxy.
+  annotations: {}

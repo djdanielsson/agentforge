@@ -1,0 +1,30 @@
+{{- if .Values.tailscaleIngress.enabled -}}
+{{/*
+Tailnet access through the Tailscale Kubernetes operator.
+
+The operator turns this into an ingress proxy whose MagicDNS name is derived
+from the namespace and this object's name, so no host is set here and the
+operator provisions the certificate.
+
+The dashboard is the only backend on purpose: it serves the SPA and proxies
+`/api` (including the event-stream WebSocket upgrade) to the API, so the whole
+app stays on one origin and there is no CORS configuration to get wrong.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.tailscaleIngress.name }}
+  labels:
+    {{- include "agentforge.labels" . | nindent 4 }}
+  {{- with .Values.tailscaleIngress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: {{ include "agentforge.web.fullname" . }}
+      port:
+        number: {{ .Values.web.service.port }}
+{{- end }}
