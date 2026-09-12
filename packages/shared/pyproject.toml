@@ -5,6 +5,9 @@ description = "Shared domain model, settings and schemas for AgentForge"
 requires-python = ">=3.11"
 dependencies = [
     "sqlalchemy>=2.0.30",
+    # The Postgres driver. `binary` avoids needing libpq at build time, which
+    # matters because the images are built from a slim base.
+    "psycopg[binary]>=3.2",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
 ]
