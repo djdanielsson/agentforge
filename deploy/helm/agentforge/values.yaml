@@ -192,6 +192,11 @@ postgres:
   auth:
     username: agentforge
     database: agentforge
+    # Set this to an existing Secret to keep the password out of values, which
+    # a public GitOps repository requires. The Secret must contain both
+    # `database-url` and `postgres-password`, and `password` below is then
+    # ignored. Create it before syncing.
+    existingSecret: ""
     # Required when enabled. The chart refuses to render without it, so a
     # default password can never leak into a repo or a release.
     # Supply with --set postgres.auth.password=... or a values file you keep

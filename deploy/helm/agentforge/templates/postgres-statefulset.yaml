@@ -60,7 +60,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentforge.secretName" . }}
+                  name: {{ include "agentforge.postgresPasswordSecretName" . }}
                   key: postgres-password
             # Keep the cluster out of the volume root: initdb wants a directory
             # it can create and own, and a lost-and-found at the mount root

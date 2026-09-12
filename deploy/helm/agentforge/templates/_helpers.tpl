@@ -102,6 +102,18 @@ externalDatabase.url supplied in values).
 {{- define "agentforge.databaseSecretName" -}}
 {{- if and (not .Values.postgres.enabled) .Values.externalDatabase.existingSecret -}}
 {{- .Values.externalDatabase.existingSecret -}}
+{{- else if and .Values.postgres.enabled .Values.postgres.auth.existingSecret -}}
+{{- .Values.postgres.auth.existingSecret -}}
+{{- else -}}
+{{- include "agentforge.fullname" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The Secret holding POSTGRES_PASSWORD. Separate from the database URL key
+because an operator-supplied Secret uses a different key name for each. */}}
+{{- define "agentforge.postgresPasswordSecretName" -}}
+{{- if and .Values.postgres.enabled .Values.postgres.auth.existingSecret -}}
+{{- .Values.postgres.auth.existingSecret -}}
 {{- else -}}
 {{- include "agentforge.fullname" . -}}
 {{- end -}}
