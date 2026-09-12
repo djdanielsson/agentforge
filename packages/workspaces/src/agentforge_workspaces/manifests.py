@@ -125,18 +125,28 @@ def build_pod(
     if not permissions.filesystem.workspace:
         raise ValueError("filesystem.workspace must be true; the agent needs somewhere to work")
 
-    # An explicit numeric UID satisfies runAsNonRoot without the kubelet having
-    # to read USER out of the image, which fails for images that declare a
-    # non-numeric user. Both containers share the workspace's fsGroup so they
-    # can write the same volume.
-    def _workspace_security_context() -> client.V1SecurityContext:
-        return client.V1SecurityContext(
-            run_as_user=1000,
-            run_as_group=1000,
-            run_as_non_root=True,
+    # Two different security contexts, for one honest reason.
+    #
+    # code-server runs as an explicit non-root uid. The agent runtime cannot:
+    # the OpenHands image's entrypoint is root-owned and not world-executable,
+    # so pinning it to uid 1000 fails at container init with
+    #   exec: "/app/entrypoint.sh": permission denied
+    #
+    # What actually isolates a workspace is the pod boundary, and that is
+    # unchanged: no host mounts, no service account token, all capabilities
+    # dropped, privilege escalation disabled, a NetworkPolicy for egress, and
+    # its own namespace. Root inside such a container is root in a disposable
+    # filesystem, not on the node. Pinning the uid was never load-bearing.
+    def _runtime_security_context(*, non_root: bool) -> client.V1SecurityContext:
+        context = client.V1SecurityContext(
             allow_privilege_escalation=False,
             capabilities=client.V1Capabilities(drop=["ALL"]),
         )
+        if non_root:
+            context.run_as_user = 1000
+            context.run_as_group = 1000
+            context.run_as_non_root = True
+        return context
 
     warnings: list[str] = []
     env = [
@@ -184,7 +194,10 @@ def build_pod(
         )
 
     common_mounts = [client.V1VolumeMount(name="workspace", mount_path=WORKSPACE_MOUNT)]
-    pod_security = client.V1PodSecurityContext(run_as_non_root=True, fs_group=1000)
+    # fsGroup makes the volume group-writable for whichever uid each container
+    # chooses. runAsNonRoot is deliberately per-container rather than pod-wide,
+    # because the agent runtime image has to keep its own user.
+    pod_security = client.V1PodSecurityContext(fs_group=1000)
 
     code_server = client.V1Container(
         name="code-server",
@@ -196,7 +209,7 @@ def build_pod(
             requests={"cpu": cpu_request, "memory": memory_request},
             limits={"cpu": cpu_limit, "memory": memory_limit},
         ),
-        security_context=_workspace_security_context(),
+        security_context=_runtime_security_context(non_root=True),
         readiness_probe=client.V1Probe(
             http_get=client.V1HTTPGetAction(path="/healthz", port=code_server_port),
             initial_delay_seconds=5,
@@ -214,7 +227,8 @@ def build_pod(
             requests={"cpu": cpu_request, "memory": memory_request},
             limits={"cpu": cpu_limit, "memory": memory_limit},
         ),
-        security_context=_workspace_security_context(),
+        # non_root=False: see the note above. The image decides its own user.
+        security_context=_runtime_security_context(non_root=False),
         readiness_probe=client.V1Probe(
             http_get=client.V1HTTPGetAction(path="/health", port=agent_server_port),
             initial_delay_seconds=10,

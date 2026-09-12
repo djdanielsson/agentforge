@@ -80,25 +80,46 @@ def test_kubernetes_access_grants_the_service_account_token(manifests, permissio
 
 
 def test_all_capabilities_are_dropped_and_escalation_is_off(manifests, permissions):
+    """These, not the uid, are what make a workspace safe."""
     pod = _pod(manifests, permissions)
     for container in pod.spec.containers:
         assert container.security_context.allow_privilege_escalation is False
         assert container.security_context.capabilities.drop == ["ALL"]
-    assert pod.spec.security_context.run_as_non_root is True
+    # fsGroup keeps the shared volume usable by both containers.
+    assert pod.spec.security_context.fs_group == 1000
 
 
-def test_both_containers_declare_an_explicit_numeric_uid(manifests, permissions):
-    """runAsNonRoot with no runAsUser makes the kubelet inspect the image's USER.
+def test_code_server_runs_as_an_explicit_non_root_uid(manifests, permissions):
+    pod = _pod(manifests, permissions)
+    code_server = next(c for c in pod.spec.containers if c.name == "code-server")
+    assert code_server.security_context.run_as_user == 1000
+    assert code_server.security_context.run_as_non_root is True
 
-    An image declaring a non-numeric user then fails admission outright with
-    CreateContainerConfigError. The OpenHands image does exactly that, which is
-    how this was found: the workspace pod came up with code-server running and
-    openhands refusing to start.
+
+def test_the_agent_runtime_keeps_its_own_image_user(manifests, permissions):
+    """The OpenHands image's entrypoint is root-owned and not world-executable.
+
+    Pinning it to uid 1000 fails at container init with
+    `exec: "/app/entrypoint.sh": permission denied`, which is how this was
+    found. What isolates a workspace is the pod boundary, not the in-container
+    uid, so this container runs as whatever user its image declares -- with
+    every capability dropped and escalation disabled.
     """
     pod = _pod(manifests, permissions)
-    for container in pod.spec.containers:
-        assert container.security_context.run_as_user == 1000
-        assert container.security_context.run_as_non_root is True
+    agent = next(c for c in pod.spec.containers if c.name == "openhands")
+    assert agent.security_context.run_as_user is None
+    assert agent.security_context.run_as_non_root is None
+    assert agent.security_context.allow_privilege_escalation is False
+    assert agent.security_context.capabilities.drop == ["ALL"]
+
+
+def test_the_agent_container_is_not_granted_extra_privileges(manifests, permissions):
+    """Running as the image's user must not become a way to gain capabilities."""
+    pod = _pod(manifests, permissions)
+    agent = next(c for c in pod.spec.containers if c.name == "openhands")
+    assert agent.security_context.privileged is None
+    for volume in pod.spec.volumes:
+        assert volume.host_path is None
 
 
 def test_both_containers_mount_only_the_workspace(manifests, permissions):
