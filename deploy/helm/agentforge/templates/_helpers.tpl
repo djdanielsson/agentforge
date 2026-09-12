@@ -189,4 +189,14 @@ env:
         key: {{ include "agentforge.bootstrapSecretKey" . }}
         # Optional so an operator-managed Secret without this key still boots.
         optional: true
+  {{- if .Values.llm.enabled }}
+  # The control plane is a gateway client too: it asks the gateway which aliases
+  # exist, and a gateway that authenticates its callers wants the same key the
+  # agents present.
+  - name: AGENTFORGE_LLM_GATEWAY_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: {{ required "llm.existingSecret is required when llm.enabled" .Values.llm.existingSecret }}
+        key: LITELLM_MASTER_KEY
+  {{- end }}
 {{- end -}}

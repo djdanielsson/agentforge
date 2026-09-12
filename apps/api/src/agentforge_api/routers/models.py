@@ -23,11 +23,12 @@ log = logging.getLogger(__name__)
 GATEWAY_TIMEOUT_SECONDS = 3.0
 
 
-def _gateway_aliases(base_url: str) -> list[str]:
+def _gateway_aliases(base_url: str, api_key: str | None = None) -> list[str]:
     """The aliases the gateway advertises, or [] when it cannot be reached."""
     url = base_url.rstrip("/") + "/v1/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
     try:
-        response = httpx.get(url, timeout=GATEWAY_TIMEOUT_SECONDS)
+        response = httpx.get(url, timeout=GATEWAY_TIMEOUT_SECONDS, headers=headers)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:  # noqa: BLE001 - any failure means "no gateway"
@@ -40,7 +41,7 @@ def _gateway_aliases(base_url: str) -> list[str]:
 def list_models() -> dict:
     """Aliases the dashboard offers, plus the one a new agent gets by default."""
     settings = get_settings()
-    aliases = _gateway_aliases(settings.llm_gateway_url)
+    aliases = _gateway_aliases(settings.llm_gateway_url, settings.llm_gateway_api_key)
     if aliases:
         return {
             "models": aliases,

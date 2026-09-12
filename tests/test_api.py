@@ -113,12 +113,44 @@ def test_model_aliases_come_from_the_gateway_when_it_answers(client, monkeypatch
 
     payload = {"data": [{"id": "smart"}, {"id": "local-coder"}]}
     monkeypatch.setattr(
-        models_router.httpx, "get", lambda url, timeout: _FakeGatewayResponse(payload)
+        models_router.httpx,
+        "get",
+        lambda url, timeout, headers=None: _FakeGatewayResponse(payload),
     )
 
     body = client.get(f"{API}/models").json()
     assert body["source"] == "gateway"
     assert body["models"] == ["smart", "local-coder"]
+
+
+def test_the_gateway_probe_presents_the_configured_key(client, monkeypatch):
+    """A gateway that authenticates its callers must still be asked for aliases."""
+    import types
+
+    from agentforge_api.routers import models as models_router
+
+    seen: dict = {}
+
+    def fake_get(url, timeout, headers=None):
+        seen["headers"] = headers
+        return _FakeGatewayResponse({"data": [{"id": "smart"}]})
+
+    monkeypatch.setattr(models_router.httpx, "get", fake_get)
+    monkeypatch.setattr(
+        models_router,
+        "get_settings",
+        lambda: types.SimpleNamespace(
+            llm_gateway_url="http://gateway:4000",
+            llm_gateway_api_key="sk-test",
+            default_agent_model="local-coder",
+            model_aliases=["local-coder"],
+        ),
+    )
+
+    body = client.get(f"{API}/models").json()
+
+    assert body["source"] == "gateway"
+    assert seen["headers"] == {"Authorization": "Bearer sk-test"}
 
 
 def test_task_lifecycle_queues_work(client):

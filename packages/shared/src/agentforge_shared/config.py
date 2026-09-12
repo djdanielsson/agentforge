@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     #: Optional bearer token for the Agent Server API.
     agent_server_api_key: str | None = None
     llm_gateway_url: str = "http://litellm:4000"
+    #: Presented to the gateway when it authenticates its callers. The chart
+    #: fills it from the same Secret the agents' key lives in.
+    llm_gateway_api_key: str | None = None
     default_agent_model: str = "local-coder"
     #: Comma-separated fallback for the model picker. The gateway is
     #: authoritative whenever it answers; this only covers a deployment that has
