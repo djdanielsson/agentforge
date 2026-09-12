@@ -90,6 +90,9 @@ EVENT_CATALOG: list[EventTypeInfo] = [
         payload_fields=["task_id", "result"],
     ),
     EventTypeInfo(type="agent.failed", description="The agent errored.", payload_fields=["error"]),
+    EventTypeInfo(
+        type="agent.status", description="Agent lifecycle changed.", payload_fields=["status"]
+    ),
     EventTypeInfo(type="agent.stopped", description="The agent was stopped.", payload_fields=[]),
     EventTypeInfo(
         type="permission.granted",

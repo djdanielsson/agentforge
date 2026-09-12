@@ -93,6 +93,17 @@ def test_agent_summary_surfaces_a_blocked_question(client):
     assert summary["question"] == "JWT or session cookies?"
 
 
+def test_event_catalog_covers_every_event_type(client):
+    """A subscriber discovers events from this endpoint, so a type that can be
+    emitted but is not listed is a silently unsubscribable event."""
+    from agentforge_shared.enums import EventType
+
+    catalog = {entry["type"] for entry in client.get(f"{API}/events/catalog").json()}
+    emitted = {str(event_type) for event_type in EventType}
+    assert emitted - catalog == set(), "these events are emitted but not discoverable"
+    assert catalog - emitted == set(), "these catalog entries are not real event types"
+
+
 def test_event_catalog_is_discoverable(client):
     catalog = client.get(f"{API}/events/catalog").json()
     types = {entry["type"] for entry in catalog}

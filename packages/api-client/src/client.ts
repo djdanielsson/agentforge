@@ -34,9 +34,14 @@ import type {
   HealthStatus,
   ListAllAgentsOptions,
   ListProjectsOptions,
+  CreateSecretInput,
   ListTasksOptions,
   PermissionDecision,
+  PermissionsResponse,
   Priority,
+  ProviderCapabilities,
+  ProvidersResponse,
+  SecretRef,
   Project,
   ProjectDetail,
   ProjectEventHandlers,
@@ -54,6 +59,7 @@ import type {
   Webhook,
   WebhookCreated,
   WebhookDelivery,
+  NetworkMode,
   WorkbenchEvent,
   Workspace,
   WorkspaceActionAccepted,
@@ -81,6 +87,94 @@ interface RequestShape<T> {
   body?: unknown;
   query?: Record<string, QueryValue>;
   signal?: AbortSignal;
+}
+
+/** Map one provider capabilities object, translating its snake_case keys. */
+export function mapProviderCapabilities(value: unknown): ProviderCapabilities {
+  const raw = readRecord(value);
+  return {
+    provider: readString(raw.provider),
+    isolation: readNullableString(raw.isolation) ?? undefined,
+    secrets: raw.secrets === undefined ? undefined : readBoolean(raw.secrets),
+    networkPolicy:
+      raw.network_policy === undefined ? undefined : readBoolean(raw.network_policy),
+    exec: raw.exec === undefined ? undefined : readBoolean(raw.exec),
+    persistentVolumes:
+      raw.persistent_volumes === undefined ? undefined : readBoolean(raw.persistent_volumes),
+    available: raw.available === undefined ? undefined : readBoolean(raw.available),
+    error: readNullableString(raw.error) ?? undefined,
+  };
+}
+
+export function mapProviders(value: unknown): ProvidersResponse {
+  const raw = readRecord(value);
+  return {
+    configured: readString(raw.configured),
+    providers: readArray(raw.providers).map(mapProviderCapabilities),
+  };
+}
+
+/** Map a secret reference. Values are absent by construction, not by omission. */
+export function mapSecretRef(value: unknown): SecretRef {
+  const raw = readRecord(value);
+  return {
+    id: readString(raw.id),
+    name: readString(raw.name),
+    scope: readString(raw.scope) as SecretRef["scope"],
+    projectId: readNullableString(raw.project_id),
+    agentId: readNullableString(raw.agent_id),
+    provider: readString(raw.provider) as SecretRef["provider"],
+    secretName: readString(raw.secret_name),
+    key: readString(raw.key),
+    envVar: readString(raw.env_var),
+    required: readBoolean(raw.required),
+    description: readNullableString(raw.description),
+    createdAt: readString(raw.created_at),
+    updatedAt: readString(raw.updated_at),
+  };
+}
+
+/** Map the effective permission policy. */
+export function mapPermissions(value: unknown): PermissionsResponse {
+  const raw = readRecord(value);
+  const policy = readRecord(raw.policy);
+  const filesystem = readRecord(policy.filesystem);
+  const terminal = readRecord(policy.terminal);
+  const network = readRecord(policy.network);
+  const kubernetes = readRecord(policy.kubernetes);
+  const git = readRecord(policy.git);
+  const secrets = readRecord(policy.secrets);
+  return {
+    agentId: readString(raw.agent_id),
+    policy: {
+      filesystem: {
+        workspace: readBoolean(filesystem.workspace),
+        host: readBoolean(filesystem.host),
+        otherProjects: readBoolean(filesystem.other_projects),
+      },
+      terminal: { enabled: readBoolean(terminal.enabled) },
+      network: { mode: (readString(network.mode) || "restricted") as NetworkMode },
+      kubernetes: { enabled: readBoolean(kubernetes.enabled) },
+      git: { enabled: readBoolean(git.enabled), push: readBoolean(git.push) },
+      secrets: { enabled: readBoolean(secrets.enabled) },
+    },
+  };
+}
+
+/** Shared body for secret registration, for both the global and project routes. */
+function secretBody(input: CreateSecretInput): Record<string, unknown> {
+  return compact({
+    name: input.name,
+    scope: input.scope,
+    provider: input.provider,
+    secret_name: input.secretName,
+    key: input.key,
+    env_var: input.envVar,
+    required: input.required,
+    description: input.description,
+    project_id: input.projectId,
+    agent_id: input.agentId,
+  });
 }
 
 // --- wire-field readers -----------------------------------------------------
@@ -894,6 +988,62 @@ export class AgentForgeClient {
   /** Revoke an API key. Answers 204; the key row stays for audit. */
   revokeApiKey(keyId: string, options: RequestOptions = {}): Promise<void> {
     return this.del(`/keys/${seg(keyId)}`, options);
+  }
+
+  // --- workspace providers --------------------------------------------------
+
+  /** Which workspace backends exist and what each can actually do. */
+  listProviders(options: RequestOptions = {}): Promise<ProvidersResponse> {
+    return this.get("/providers", mapProviders, options);
+  }
+
+  // --- agent permissions ----------------------------------------------------
+
+  /** The policy actually in force, with the server's defaults filled in. */
+  getPermissions(agentId: string, options: RequestOptions = {}): Promise<PermissionsResponse> {
+    return this.get(`/agents/${seg(agentId)}/permissions`, mapPermissions, options);
+  }
+
+  // --- secret references ----------------------------------------------------
+  //
+  // Registering a secret means pointing at one that already exists in the
+  // workspace provider's store. No method here can send or receive a value.
+
+  /** Global references only; a project's own secrets are listed through it. */
+  listGlobalSecrets(options: RequestOptions = {}): Promise<SecretRef[]> {
+    return this.get("/secrets", (raw) => mapList(raw, mapSecretRef), options);
+  }
+
+  /** Register a global reference, for credentials every project may use. */
+  createGlobalSecret(input: CreateSecretInput, options: RequestOptions = {}): Promise<SecretRef> {
+    return this.post("/secrets", secretBody(input), mapSecretRef, options);
+  }
+
+  /** A project's references, including the globals it inherits. */
+  listProjectSecrets(projectId: string, options: RequestOptions = {}): Promise<SecretRef[]> {
+    return this.get(`/projects/${seg(projectId)}/secrets`, (raw) => mapList(raw, mapSecretRef), options);
+  }
+
+  /**
+   * Register a reference scoped to one project, or to one of its agents when
+   * `scope: "agent"` and `agentId` are supplied.
+   */
+  createProjectSecret(
+    projectId: string,
+    input: CreateSecretInput,
+    options: RequestOptions = {},
+  ): Promise<SecretRef> {
+    return this.post(
+      `/projects/${seg(projectId)}/secrets`,
+      secretBody(input),
+      mapSecretRef,
+      options,
+    );
+  }
+
+  /** Remove the reference. The underlying secret is someone else's to delete. */
+  deleteSecret(secretId: string, options: RequestOptions = {}): Promise<void> {
+    return this.del(`/secrets/${seg(secretId)}`, options);
   }
 
   // --- webhooks -------------------------------------------------------------

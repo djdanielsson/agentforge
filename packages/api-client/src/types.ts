@@ -493,3 +493,88 @@ export interface ProjectEventHandlers {
   onClose?: (event: CloseEvent) => void;
   onError?: (event: Event) => void;
 }
+
+// --- workspace providers ---------------------------------------------------
+
+/**
+ * What a workspace backend can actually do. The API reports this per provider
+ * so the UI disables a control the selected backend cannot honour, instead of
+ * offering it and failing at provisioning time.
+ */
+export interface ProviderCapabilities {
+  provider: string;
+  isolation?: string;
+  secrets?: boolean;
+  networkPolicy?: boolean;
+  exec?: boolean;
+  persistentVolumes?: boolean;
+  /** False when the backend is registered but unusable here (no binary, no creds). */
+  available?: boolean;
+  error?: string;
+}
+
+export interface ProvidersResponse {
+  configured: string;
+  providers: ProviderCapabilities[];
+}
+
+// --- secret references -----------------------------------------------------
+
+export type SecretScope = "global" | "project" | "agent";
+export type SecretProvider = "kubernetes" | "podman" | "external";
+
+/**
+ * A pointer to a credential. There is deliberately no `value` field: the value
+ * lives in the workspace provider's own secret store and the API cannot return
+ * it even by accident.
+ */
+export interface SecretRef {
+  id: string;
+  name: string;
+  scope: SecretScope;
+  projectId: string | null;
+  agentId: string | null;
+  provider: SecretProvider;
+  /** The provider-native object name, e.g. the Kubernetes Secret. */
+  secretName: string;
+  /** The key inside that object. */
+  key: string;
+  /** The environment variable it becomes inside the workspace. */
+  envVar: string;
+  required: boolean;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSecretInput {
+  name: string;
+  secretName: string;
+  key: string;
+  envVar: string;
+  scope?: SecretScope;
+  provider?: SecretProvider;
+  required?: boolean;
+  description?: string;
+  projectId?: string;
+  agentId?: string;
+}
+
+// --- agent permissions -----------------------------------------------------
+
+export type NetworkMode = "none" | "restricted" | "open";
+
+/** The effective policy, with the server's defaults filled in. */
+export interface AgentPolicy {
+  filesystem: { workspace: boolean; host: boolean; otherProjects: boolean };
+  terminal: { enabled: boolean };
+  network: { mode: NetworkMode };
+  kubernetes: { enabled: boolean };
+  git: { enabled: boolean; push: boolean };
+  secrets: { enabled: boolean };
+}
+
+export interface PermissionsResponse {
+  agentId: string;
+  policy: AgentPolicy;
+}

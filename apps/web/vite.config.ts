@@ -8,10 +8,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Forwarded unchanged: the API mounts everything under /api/v1, so
+      // stripping the prefix here would turn a valid path into a 404.
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ""),
         ws: true,
       },
     },
