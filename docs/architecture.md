@@ -55,10 +55,12 @@ loop with several responsibilities:
   them with HMAC signatures and retries.
 
 Status: the queue, the webhook dispatcher and the workspace manager are
-implemented and tested. The agent manager is **not finished**: it references
-event types that are not in the catalog, so a task dispatch raises rather than
-completing. The loop starts and polls, and provisioning works, but no task has
-been executed by an agent end to end.
+implemented and tested. The agent manager speaks OpenHands 0.59's real contract
+(see below) and emits only catalogued event types. It has **not been exercised
+against a live server yet**: no task has been executed by an agent end to end, and
+the permission flow is dormant — OpenHands 0.59 does not expose the
+request/decision API this code was written for, so `agent.permission_required` is
+never emitted today.
 
 ### Workspace providers — isolation
 
@@ -124,11 +126,22 @@ releases emit (`type` vs `event`, `content` vs `message`), and the client accept
 an injected `httpx.Client`, which is how the test suite pins the contract against
 a mock transport.
 
-Status: **contract pinned, not yet exercised against a live server.** The paths
-and payload shapes are our best reading of the Agent Server's API; no Agent
-Server has been run against this client yet. The tests use a mock transport, so
-they prove our mapping is self-consistent, not that it matches upstream. Pointing
-the orchestrator at a real Agent Server is milestone 3.
+Status: **pinned against the running server, not yet exercised end to end.** The
+paths and payload shapes come from the `/openapi.json` of a live OpenHands 0.59
+pod, not from documentation. Two consequences are worth knowing:
+
+- a conversation *is* the agent session, so `create_conversation` replaces
+  "create an agent", and a turn is not request/response: `send_message` is queued
+  and the answer arrives through the events endpoint, which `wait_for_reply`
+  follows;
+- the model is a server-level setting (`configure_model`), so an agent's `model`
+  alias is applied to the workspace's server before its conversation starts.
+
+The tests still use a mock transport, so they pin our reading rather than proving
+the server agrees — dispatching a real task is what would prove that. Note also
+that OpenHands answers *every* unknown path with its single-page app and HTTP
+200, so a wrong path fails silently rather than loudly; the pinned paths are what
+stands between us and that.
 
 ## Isolation and policy
 

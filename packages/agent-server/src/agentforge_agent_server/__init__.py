@@ -5,9 +5,9 @@ Server, and this package is the only place that knows how to talk to it. That
 keeps upstream API drift contained to one package.
 """
 
-from .client import AgentServerClient
+from .client import AgentServerClient, Routes
 from .errors import AgentServerError, AgentServerUnavailable
-from .models import AgentEvent, AgentRun, AgentSpec, WorkspaceRef
+from .models import AgentEvent, AgentRun, ConversationSpec, FileEntry
 
 __all__ = [
     "AgentEvent",
@@ -15,6 +15,7 @@ __all__ = [
     "AgentServerClient",
     "AgentServerError",
     "AgentServerUnavailable",
-    "AgentSpec",
-    "WorkspaceRef",
+    "ConversationSpec",
+    "FileEntry",
+    "Routes",
 ]

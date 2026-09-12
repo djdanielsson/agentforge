@@ -86,6 +86,10 @@ class Settings(BaseSettings):
 
     # --- orchestrator ---
     orchestrator_poll_interval: float = 2.0
+    #: How long one agent turn may take before the task is failed. Generous by
+    #: default: a local model on CPU is slow, and a half-finished turn is worse
+    #: than a slow one.
+    agent_turn_timeout_seconds: float = 900.0
     task_lease_seconds: int = 300
     task_max_attempts: int = 3
 

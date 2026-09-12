@@ -1,8 +1,10 @@
 """The Agent Server client.
 
 Tested against a mock transport so the contract is pinned without needing a live
-Agent Server. The endpoint shapes are the part most likely to drift upstream, so
-these tests exist to make that drift loud rather than silent.
+server. The paths and payload shapes are pinned against OpenHands 0.59, read from
+its own `/openapi.json` — and that pinning matters, because every unknown path on
+OpenHands answers with its single-page app and HTTP 200. A wrong path there is not
+a 404 that shouts; it is an HTML body that looks like success.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ def make_client():
 
 
 def test_health_is_true_on_success(make_client):
-    client = make_client(lambda request: httpx.Response(200, json={"status": "ok"}))
+    client = make_client(lambda request: httpx.Response(200, json="OK"))
     assert client.health() is True
 
 
@@ -34,89 +36,148 @@ def test_health_is_false_when_unreachable(make_client):
     def handler(request):
         raise httpx.ConnectError("refused", request=request)
 
-    client = make_client(handler)
-    assert client.health() is False
+    assert make_client(handler).health() is False
 
 
-def test_create_agent_sends_the_model_and_metadata(make_client):
+def test_configure_model_posts_the_alias_and_the_gateway(make_client):
+    """The alias is a server-level setting, so it is set before any conversation."""
     captured = {}
 
     def handler(request):
+        captured["url"] = str(request.url)
         captured["body"] = json.loads(request.content)
-        return httpx.Response(201, json={"id": "server-agent-1"})
+        return httpx.Response(200, json={"llm_model": "smart"})
 
-    client = make_client(handler)
-    from agentforge_agent_server import AgentSpec
+    make_client(handler).configure_model(
+        model="smart", base_url="http://agentforge-llm:4000", api_key="sk-key"
+    )
 
-    result = client.create_agent(
-        AgentSpec(
-            name="Auth API",
-            model="smart",
-            workspace_id="af-demo",
-            metadata={"agentforge_agent_id": "a1"},
+    assert captured["url"].endswith("/api/settings")
+    assert captured["body"] == {
+        "llm_model": "smart",
+        "llm_base_url": "http://agentforge-llm:4000",
+        "llm_api_key": "sk-key",
+    }
+
+
+def test_available_models_reads_the_gateway_list(make_client):
+    client = make_client(lambda request: httpx.Response(200, json=["local-coder", "smart"]))
+    assert client.available_models() == ["local-coder", "smart"]
+
+
+def test_create_conversation_sends_repository_branch_and_instructions(make_client):
+    captured = {}
+
+    def handler(request):
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"conversation_id": "c-1"})
+
+    from agentforge_agent_server import ConversationSpec
+
+    created = make_client(handler).create_conversation(
+        ConversationSpec(
+            repository="https://github.com/example/cf",
+            branch="agent/auth-api",
+            instructions="You are Auth API.",
         )
     )
-    assert result["id"] == "server-agent-1"
-    assert captured["body"]["llm_model"] == "smart"
-    assert captured["body"]["workspace_id"] == "af-demo"
-    assert captured["body"]["metadata"]["agentforge_agent_id"] == "a1"
+
+    assert created["conversation_id"] == "c-1"
+    assert captured["url"].endswith("/api/conversations")
+    assert captured["body"] == {
+        "repository": "https://github.com/example/cf",
+        "selected_branch": "agent/auth-api",
+        "conversation_instructions": "You are Auth API.",
+    }
 
 
-def test_start_conversation_requires_a_session_id(make_client):
-    client = make_client(lambda request: httpx.Response(200, json={"ok": True}))
-    from agentforge_agent_server import AgentServerError
+def test_starting_an_already_started_conversation_is_not_an_error(make_client):
+    """Creating a conversation can start it; starting it twice is not a failure."""
+    seen = []
 
-    with pytest.raises(AgentServerError, match="session id"):
-        client.start_conversation("server-agent-1")
+    def handler(request):
+        seen.append(str(request.url))
+        if request.method == "POST":
+            return httpx.Response(409, json={"detail": "already started"})
+        return httpx.Response(200, json={"conversation_id": "c-1", "status": "running"})
 
+    run = make_client(handler).start_conversation("c-1")
 
-def test_start_conversation_returns_the_run(make_client):
-    client = make_client(lambda request: httpx.Response(200, json={"session_id": "s-1"}))
-    run = client.start_conversation("server-agent-1")
-    assert run.session_id == "s-1"
-
-
-def test_send_message_maps_a_plain_reply(make_client):
-    client = make_client(
-        lambda request: httpx.Response(200, json={"type": "message", "content": "done"})
-    )
-    event = client.send_message("s-1", "add a health endpoint")
-    assert event.content == "done"
-    assert event.blocked is False
-    assert event.finished is False
+    assert run.session_id == "c-1"
+    assert any(url.endswith("/api/conversations/c-1/start") for url in seen)
+    assert any(url.endswith("/api/conversations/c-1") for url in seen)
 
 
-def test_send_message_surfaces_a_blocking_question(make_client):
-    client = make_client(
-        lambda request: httpx.Response(
-            200, json={"blocked": True, "question": "JWT or session cookies?"}
-        )
-    )
-    event = client.send_message("s-1", "add auth")
-    assert event.blocked is True
-    assert event.question == "JWT or session cookies?"
+def test_send_message_posts_the_turn_and_returns_nothing(make_client):
+    captured = {}
+
+    def handler(request):
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={})
+
+    assert make_client(handler).send_message("c-1", "add a health endpoint") is None
+    assert captured["url"].endswith("/api/conversations/c-1/message")
+    assert captured["body"] == {"message": "add a health endpoint"}
 
 
-def test_send_message_surfaces_a_permission_request(make_client):
-    client = make_client(
-        lambda request: httpx.Response(
+def test_events_read_a_bare_list_of_openhands_events(make_client):
+    payload = [
+        {"id": 1, "source": "user", "message": "add auth"},
+        {"id": 2, "source": "agent", "action": {"message": "reading the router"}},
+        {"id": 3, "source": "agent", "observation": {"content": "142 passed"}, "state": "finished"},
+    ]
+    client = make_client(lambda request: httpx.Response(200, json=payload))
+
+    events = client.events("c-1")
+
+    assert [event.type for event in events] == ["user", "agent", "agent"]
+    assert events[1].content == "reading the router"
+    assert events[2].content == "142 passed"
+    assert events[2].finished is True
+
+
+def test_events_ask_for_a_cursor_and_a_limit(make_client):
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=[])
+
+    make_client(handler).events("c-1", start_id=7, limit=25)
+
+    assert "start_id=7" in seen["url"] and "limit=25" in seen["url"]
+
+
+def test_wait_for_reply_follows_events_until_the_turn_ends(make_client):
+    """A turn is not request/response: the message is queued, the reply is events."""
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(200, json=[{"id": 5, "source": "user", "message": "go"}])
+        return httpx.Response(
             200,
-            json={
-                "permission_request": {
-                    "request_id": "req-1",
-                    "command": "npm install stripe",
-                    "reason": "add the billing SDK",
-                }
-            },
+            json=[{"id": 6, "source": "agent", "message": "done", "state": "finished"}],
+        )
+
+    event = make_client(handler).wait_for_reply("c-1", timeout=5, poll=0)
+
+    assert event.content == "done"
+    assert event.finished is True
+
+
+def test_wait_for_reply_reports_an_error_event(make_client):
+    client = make_client(
+        lambda request: httpx.Response(
+            200, json=[{"id": 1, "source": "agent", "error": "model unreachable"}]
         )
     )
-    event = client.send_message("s-1", "add billing")
-    assert event.permission_request["command"] == "npm install stripe"
 
+    event = client.wait_for_reply("c-1", timeout=5, poll=0)
 
-def test_send_message_surfaces_an_error(make_client):
-    client = make_client(lambda request: httpx.Response(200, json={"error": "model unreachable"}))
-    event = client.send_message("s-1", "do work")
     assert event.error == "model unreachable"
 
 
@@ -130,87 +191,76 @@ def test_event_payload_tolerates_alternate_key_names():
     assert event.finished is True
 
 
-def test_get_events_reads_a_bare_list(make_client):
-    client = make_client(lambda request: httpx.Response(200, json=[{"type": "a"}, {"type": "b"}]))
-    assert [e.type for e in client.get_events("s-1")] == ["a", "b"]
+def test_list_files_reads_both_entry_shapes(make_client):
+    client = make_client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "files": [
+                    "src/",
+                    {"path": "src/main.py", "size": 42},
+                ]
+            },
+        )
+    )
+
+    entries = client.list_files("c-1")
+
+    assert entries[0].path == "src/"
+    assert entries[0].is_dir is True
+    assert entries[1].path == "src/main.py"
+    assert entries[1].size == 42
 
 
-def test_get_events_reads_an_envelope(make_client):
-    client = make_client(lambda request: httpx.Response(200, json={"items": [{"type": "a"}]}))
-    assert [e.type for e in client.get_events("s-1")] == ["a"]
-
-
-def test_file_read_and_write_round_trip(make_client):
+def test_read_file_uses_the_select_file_endpoint(make_client):
     seen = {}
 
     def handler(request):
-        seen[request.method] = str(request.url)
-        if request.method == "GET":
-            return httpx.Response(200, json={"content": "print('hi')"})
-        return httpx.Response(200, json={})
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"code": "print('hi')"})
 
-    client = make_client(handler)
-    assert client.read_file("ws-1", "src/main.py") == "print('hi')"
-    client.write_file("ws-1", "src/main.py", "print('bye')")
-    assert "files/src/main.py" in seen["GET"]
-    assert "files/src/main.py" in seen["PUT"]
+    assert make_client(handler).read_file("c-1", "src/main.py") == "print('hi')"
+    assert "/api/conversations/c-1/select-file" in seen["url"]
 
 
-def test_git_operation_posts_the_operation_name(make_client):
-    captured = {}
+def test_git_diff_and_changes_hit_their_own_endpoints(make_client):
+    seen = []
 
     def handler(request):
-        captured["url"] = str(request.url)
-        return httpx.Response(200, json={"diff": "..."})
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"diff": "...", "changes": []})
 
     client = make_client(handler)
-    client.git("ws-1", "diff", base="main")
-    assert "/git/diff" in captured["url"]
+    assert client.git_diff("c-1") == "..."
+    client.git_changes("c-1")
 
-
-def test_exec_returns_output(make_client):
-    client = make_client(lambda request: httpx.Response(200, json={"output": "142 passed"}))
-    assert client.exec("ws-1", "pytest -q") == "142 passed"
+    assert any(url.endswith("/api/conversations/c-1/git/diff") for url in seen)
+    assert any(url.endswith("/api/conversations/c-1/git/changes") for url in seen)
 
 
 def test_vscode_url_is_returned(make_client):
     client = make_client(lambda request: httpx.Response(200, json={"url": "http://vs/abc"}))
-    assert client.vscode_url("ws-1") == "http://vs/abc"
+    assert client.vscode_url("c-1") == "http://vs/abc"
 
 
 def test_client_errors_are_not_retryable(make_client):
     from agentforge_agent_server import AgentServerError
 
-    client = make_client(lambda request: httpx.Response(400, text="bad request"))
-    with pytest.raises(AgentServerError) as caught:
-        client.get_agent("x")
-    assert caught.value.retryable is False
-    assert caught.value.status_code == 400
+    client = make_client(lambda request: httpx.Response(400, json={"detail": "bad request"}))
+
+    with pytest.raises(AgentServerError) as excinfo:
+        client.events("c-1")
+
+    assert excinfo.value.retryable is False
 
 
-def test_server_errors_are_retryable(make_client):
-    from agentforge_agent_server import AgentServerError
-
-    client = make_client(lambda request: httpx.Response(503, text="down"))
-    with pytest.raises(AgentServerError) as caught:
-        client.get_agent("x")
-    assert caught.value.retryable is True
-
-
-def test_transport_failure_is_reported_as_unavailable(make_client):
+def test_transport_failures_are_retryable(make_client):
     from agentforge_agent_server import AgentServerUnavailable
 
     def handler(request):
-        raise httpx.ReadTimeout("timed out", request=request)
+        raise httpx.ConnectError("refused", request=request)
 
-    client = make_client(handler)
-    with pytest.raises(AgentServerUnavailable, match="could not reach"):
-        client.get_agent("x")
+    with pytest.raises(AgentServerUnavailable) as excinfo:
+        make_client(handler).events("c-1")
 
-
-def test_base_url_is_normalised(make_client):
-    from agentforge_agent_server import AgentServerClient
-
-    client = AgentServerClient("http://agent-server/")
-    assert client.base_url == "http://agent-server"
-    client.close()
+    assert excinfo.value.retryable is True

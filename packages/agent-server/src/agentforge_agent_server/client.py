@@ -1,14 +1,29 @@
-"""HTTP and WebSocket client for the OpenHands Agent Server.
+"""Client for the OpenHands Agent Server.
 
-Endpoint shapes differ between Agent Server releases. Every path lives in
-`Routes` below, so adapting to a version bump is a change to one dataclass and
-the handful of methods that read a response, not a hunt through the codebase.
+AgentForge does not embed an agent SDK. Each project workspace runs an OpenHands
+server, and this package is the only place that knows how to talk to it, so
+upstream API drift stays contained here.
+
+The paths below are pinned against OpenHands 0.59, read from the running server's
+own `/openapi.json`. That matters more than it sounds: every unknown path on that
+server answers with the single-page app and HTTP 200, so a wrong path looks like
+a success until you try to read the body. `tests/test_agent_server.py` exists to
+make the next drift loud.
+
+Two shape differences from the design this replaces:
+
+* A conversation *is* the agent session — there is no separate agent object to
+  create, so `create_conversation` replaces `create_agent`.
+* The model is a server-level setting (`configure_model`), not a per-conversation
+  field, which is why an agent's `model` alias is applied before the conversation
+  starts.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -16,7 +31,7 @@ from typing import Any
 import httpx
 
 from .errors import AgentServerError, AgentServerUnavailable
-from .models import AgentEvent, AgentRun, AgentSpec, FileEntry, WorkspaceRef
+from .models import AgentEvent, AgentRun, ConversationSpec, FileEntry
 
 log = logging.getLogger(__name__)
 
@@ -26,29 +41,26 @@ class Routes:
     """Every path we depend on, in one place."""
 
     health: str = "/health"
+    settings: str = "/api/settings"
+    options_models: str = "/api/options/models"
+    options_config: str = "/api/options/config"
 
-    workspaces: str = "/api/workspaces"
-    workspace: str = "/api/workspaces/{workspace_id}"
-
-    agents: str = "/api/agents"
-    agent: str = "/api/agents/{agent_id}"
-    agent_stop: str = "/api/agents/{agent_id}/stop"
-    agent_restart: str = "/api/agents/{agent_id}/restart"
-
-    conversations: str = "/api/agents/{agent_id}/conversations"
+    conversations: str = "/api/conversations"
     conversation: str = "/api/conversations/{session_id}"
-    messages: str = "/api/conversations/{session_id}/messages"
+    conversation_start: str = "/api/conversations/{session_id}/start"
+    conversation_stop: str = "/api/conversations/{session_id}/stop"
+    messages: str = "/api/conversations/{session_id}/message"
     events: str = "/api/conversations/{session_id}/events"
 
-    files: str = "/api/workspaces/{workspace_id}/files"
-    file: str = "/api/workspaces/{workspace_id}/files/{path}"
-    git: str = "/api/workspaces/{workspace_id}/git/{operation}"
-    terminal: str = "/api/workspaces/{workspace_id}/terminal"
-    vscode: str = "/api/workspaces/{workspace_id}/vscode"
+    list_files: str = "/api/conversations/{session_id}/list-files"
+    select_file: str = "/api/conversations/{session_id}/select-file"
+    git_diff: str = "/api/conversations/{session_id}/git/diff"
+    git_changes: str = "/api/conversations/{session_id}/git/changes"
+    vscode: str = "/api/conversations/{session_id}/vscode-url"
 
 
 class AgentServerClient:
-    """One instance per workspace's Agent Server."""
+    """One instance per workspace's OpenHands server."""
 
     def __init__(
         self,
@@ -115,181 +127,194 @@ class AgentServerClient:
         except AgentServerError:
             return False
 
-    # --- workspaces -------------------------------------------------------
+    # --- model configuration ---------------------------------------------
 
-    def create_workspace(
-        self, *, path: str = "/workspace", name: str | None = None
-    ) -> WorkspaceRef:
-        body: dict[str, Any] = {"path": path}
-        if name:
-            body["name"] = name
-        data = self._request("POST", self.routes.workspaces, json=body) or {}
-        return WorkspaceRef(
-            id=str(data.get("id") or data.get("workspace_id") or path),
-            path=data.get("path", path),
-            status=str(data.get("status", "ready")),
-            detail=data,
-        )
+    def configure_model(
+        self,
+        *,
+        model: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Point this server at a model.
 
-    def list_workspaces(self) -> list[WorkspaceRef]:
-        data = self._request("GET", self.routes.workspaces) or []
-        items = data if isinstance(data, list) else data.get("items", [])
-        return [
-            WorkspaceRef(
-                id=str(item.get("id")),
-                path=item.get("path", "/workspace"),
-                status=str(item.get("status", "unknown")),
-                detail=item,
-            )
-            for item in items
-        ]
+        `model` is an AgentForge alias; `base_url` is the LiteLLM gateway, which
+        is what resolves the alias to a provider. OpenHands stores this per
+        server, so it must be applied before a conversation starts (and again
+        after a restart, since the server keeps its settings in the pod).
+        """
+        body: dict[str, Any] = {"llm_model": model}
+        if base_url:
+            body["llm_base_url"] = base_url
+        if api_key:
+            body["llm_api_key"] = api_key
+        return self._request("POST", self.routes.settings, json=body) or {}
 
-    def delete_workspace(self, workspace_id: str) -> None:
-        self._request("DELETE", self._path("workspace", workspace_id=workspace_id))
+    def settings(self) -> dict[str, Any]:
+        return self._request("GET", self.routes.settings) or {}
 
-    # --- agents -----------------------------------------------------------
-
-    def create_agent(self, spec: AgentSpec) -> dict[str, Any]:
-        body: dict[str, Any] = {"name": spec.name, "llm_model": spec.model}
-        if spec.workspace_id:
-            body["workspace_id"] = spec.workspace_id
-        if spec.system_prompt:
-            body["system_prompt"] = spec.system_prompt
-        if spec.metadata:
-            body["metadata"] = spec.metadata
-        return self._request("POST", self.routes.agents, json=body) or {}
-
-    def get_agent(self, agent_id: str) -> dict[str, Any]:
-        return self._request("GET", self._path("agent", agent_id=agent_id)) or {}
-
-    def stop_agent(self, agent_id: str) -> None:
-        self._request("POST", self._path("agent_stop", agent_id=agent_id))
-
-    def restart_agent(self, agent_id: str) -> dict[str, Any]:
-        return self._request("POST", self._path("agent_restart", agent_id=agent_id)) or {}
+    def available_models(self) -> list[str]:
+        """Aliases the server will accept — it asks the gateway for these."""
+        data = self._request("GET", self.routes.options_models) or []
+        if isinstance(data, dict):
+            data = data.get("models", [])
+        return [str(item) for item in data]
 
     # --- conversations ----------------------------------------------------
 
-    def start_conversation(self, agent_id: str, *, prompt: str | None = None) -> AgentRun:
-        body = {"prompt": prompt} if prompt else {}
-        data = (
-            self._request("POST", self._path("conversations", agent_id=agent_id), json=body) or {}
-        )
-        session_id = data.get("session_id") or data.get("id")
-        if not session_id:
-            raise AgentServerError(
-                "agent server did not return a session id", detail=str(data)[:500]
-            )
-        return AgentRun(
-            session_id=str(session_id), status=str(data.get("status", "running")), detail=data
-        )
+    def create_conversation(self, spec: ConversationSpec | None = None) -> dict[str, Any]:
+        spec = spec or ConversationSpec()
+        body: dict[str, Any] = {}
+        if spec.repository:
+            body["repository"] = spec.repository
+        if spec.branch:
+            body["selected_branch"] = spec.branch
+        if spec.instructions:
+            body["conversation_instructions"] = spec.instructions
+        return self._request("POST", self.routes.conversations, json=body) or {}
 
-    def send_message(self, session_id: str, content: str) -> AgentEvent:
-        """Send a turn and return the agent's response event."""
-        data = (
-            self._request(
-                "POST", self._path("messages", session_id=session_id), json={"content": content}
-            )
-            or {}
-        )
-        return AgentEvent.from_payload(data)
+    def list_conversations(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        data = self._request("GET", self.routes.conversations, params={"limit": limit}) or []
+        if isinstance(data, dict):
+            data = data.get("items", data.get("conversations", []))
+        return list(data)
 
-    def get_events(self, session_id: str) -> list[AgentEvent]:
-        data = self._request("GET", self._path("events", session_id=session_id)) or []
-        items = data if isinstance(data, list) else data.get("items", [])
-        return [AgentEvent.from_payload(item) for item in items]
+    def start_conversation(self, session_id: str) -> AgentRun:
+        """Start a conversation, or report the one already running.
 
-    def stream_events(self, session_id: str) -> Iterator[AgentEvent]:
-        """Yield events as the agent produces them, over the WebSocket API.
-
-        Converted to a plain iterator so callers do not need an async runtime.
-        The orchestrator runs one turn per task, so blocking is acceptable and
-        much simpler to reason about than a second event loop.
+        Creating a conversation can start it immediately, and starting one twice
+        is a 4xx rather than an error worth failing a task over.
         """
-        import asyncio
-
-        import websockets
-
-        url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
-        url = f"{url}{self._path('events', session_id=session_id)}"
-
-        async def _consume() -> list[AgentEvent]:
-            collected: list[AgentEvent] = []
-            headers = {"authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-            async with websockets.connect(url, additional_headers=headers) as socket:
-                async for raw in socket:
-                    try:
-                        collected.append(AgentEvent.from_payload(json.loads(raw)))
-                    except json.JSONDecodeError:
-                        log.warning("unparseable agent event: %r", raw[:200])
-            return collected
-
-        yield from asyncio.run(_consume())
-
-    def answer_permission(self, session_id: str, request_id: str, decision: str) -> None:
-        self._request(
-            "POST",
-            f"{self._path('messages', session_id=session_id)}/permissions",
-            json={"request_id": request_id, "decision": decision},
+        try:
+            data = (
+                self._request("POST", self._path("conversation_start", session_id=session_id)) or {}
+            )
+        except AgentServerError as exc:
+            if exc.status_code in (400, 409):
+                log.debug("conversation %s already started: %s", session_id, exc)
+                data = self._request("GET", self._path("conversation", session_id=session_id)) or {}
+            else:
+                raise
+        return AgentRun(
+            session_id=str(data.get("conversation_id") or data.get("id") or session_id),
+            status=str(data.get("status") or data.get("state") or "running"),
+            detail=data,
         )
 
-    # --- files ------------------------------------------------------------
+    def stop_conversation(self, session_id: str) -> None:
+        self._request("POST", self._path("conversation_stop", session_id=session_id))
 
-    def list_files(self, workspace_id: str, path: str = ".") -> list[FileEntry]:
+    def send_message(self, session_id: str, message: str) -> None:
+        """Queue a turn. OpenHands acknowledges it; the reply arrives as events."""
+        self._request(
+            "POST", self._path("messages", session_id=session_id), json={"message": message}
+        )
+
+    # --- events -----------------------------------------------------------
+
+    def events(self, session_id: str, *, start_id: int = 0, limit: int = 100) -> list[AgentEvent]:
         data = (
             self._request(
-                "GET", self._path("files", workspace_id=workspace_id), params={"path": path}
+                "GET",
+                self._path("events", session_id=session_id),
+                params={"start_id": start_id, "limit": limit},
             )
             or []
         )
-        items = data if isinstance(data, list) else data.get("items", [])
-        return [
-            FileEntry(
-                path=str(item.get("path")),
-                is_dir=bool(item.get("is_dir")),
-                size=item.get("size"),
+        if isinstance(data, dict):
+            data = data.get("events", data.get("items", []))
+        return [AgentEvent.from_payload(item) for item in data if isinstance(item, dict)]
+
+    def wait_for_reply(
+        self,
+        session_id: str,
+        *,
+        start_id: int = 0,
+        timeout: float = 900.0,
+        poll: float = 2.0,
+    ) -> AgentEvent:
+        """Follow the event stream until the turn ends.
+
+        OpenHands has no request/response turn: `send_message` returns as soon as
+        it is queued, and everything the agent does arrives as events. This polls
+        the same events endpoint until the conversation finishes, then reports the
+        last thing the agent said.
+        """
+        deadline = time.monotonic() + timeout
+        last: AgentEvent | None = None
+        cursor = start_id
+        while time.monotonic() < deadline:
+            for event in self.events(session_id, start_id=cursor):
+                cursor = max(cursor, int(event.raw.get("id", cursor) or cursor))
+                last = event
+                if event.error or event.blocked or event.finished:
+                    return event
+            time.sleep(poll)
+
+        if last is None:
+            raise AgentServerError(f"conversation {session_id} produced no events")
+        return last
+
+    def stream_events(self, session_id: str, *, start_id: int = 0) -> Iterator[AgentEvent]:
+        """Yield events as they appear. Blocking, because the orchestrator runs
+        one turn per task and a second event loop would buy nothing."""
+        cursor = start_id
+        while True:
+            batch = self.events(session_id, start_id=cursor)
+            if not batch:
+                return
+            for event in batch:
+                cursor = max(cursor, int(event.raw.get("id", cursor) or cursor))
+                yield event
+
+    # --- files and git ----------------------------------------------------
+
+    def list_files(self, session_id: str, path: str = "/workspace") -> list[FileEntry]:
+        data = (
+            self._request(
+                "GET", self._path("list_files", session_id=session_id), params={"path": path}
             )
-            for item in items
-        ]
-
-    def read_file(self, workspace_id: str, path: str) -> str:
-        data = self._request(
-            "GET", f"{self._path('files', workspace_id=workspace_id)}/{path.lstrip('/')}"
+            or {}
         )
         if isinstance(data, dict):
-            return data.get("content", "")
-        return "" if data is None else str(data)
+            data = data.get("files", data.get("items", []))
+        entries: list[FileEntry] = []
+        for item in data:
+            if isinstance(item, str):
+                entries.append(FileEntry(path=item, is_dir=item.endswith("/")))
+                continue
+            entries.append(
+                FileEntry(
+                    path=str(item.get("path") or item.get("name")),
+                    is_dir=bool(item.get("is_dir") or item.get("type") == "directory"),
+                    size=item.get("size"),
+                )
+            )
+        return entries
 
-    def write_file(self, workspace_id: str, path: str, content: str) -> None:
-        self._request(
-            "PUT",
-            f"{self._path('files', workspace_id=workspace_id)}/{path.lstrip('/')}",
-            json={"content": content},
-        )
-
-    # --- git --------------------------------------------------------------
-
-    def git(self, workspace_id: str, operation: str, **params: Any) -> Any:
-        """`operation` is status, diff, commit, branches, checkout or push."""
-        return self._request(
-            "POST",
-            self._path("git", workspace_id=workspace_id, operation=operation),
-            json=params or {},
-        )
-
-    # --- terminal and IDE -------------------------------------------------
-
-    def exec(self, workspace_id: str, command: str, *, timeout: float | None = None) -> str:
-        data = self._request(
-            "POST",
-            self._path("terminal", workspace_id=workspace_id),
-            json={"command": command},
-            **({"timeout": timeout} if timeout else {}),
+    def read_file(self, session_id: str, path: str) -> str:
+        data = (
+            self._request(
+                "GET", self._path("select_file", session_id=session_id), params={"file": path}
+            )
+            or {}
         )
         if isinstance(data, dict):
-            return data.get("output", "")
+            return str(data.get("code", data.get("content", "")))
         return "" if data is None else str(data)
 
-    def vscode_url(self, workspace_id: str) -> str | None:
-        data = self._request("GET", self._path("vscode", workspace_id=workspace_id)) or {}
-        return data.get("url") if isinstance(data, dict) else None
+    def git_diff(self, session_id: str) -> str:
+        data = self._request("GET", self._path("git_diff", session_id=session_id)) or {}
+        return str(data.get("diff", "")) if isinstance(data, dict) else str(data)
+
+    def git_changes(self, session_id: str) -> dict[str, Any]:
+        data = self._request("GET", self._path("git_changes", session_id=session_id)) or {}
+        return data if isinstance(data, dict) else {"raw": data}
+
+    # --- IDE --------------------------------------------------------------
+
+    def vscode_url(self, session_id: str) -> str | None:
+        data = self._request("GET", self._path("vscode", session_id=session_id)) or {}
+        if isinstance(data, dict):
+            return data.get("url") or data.get("vscode_url")
+        return None

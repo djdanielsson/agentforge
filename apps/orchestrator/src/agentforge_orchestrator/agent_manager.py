@@ -15,13 +15,13 @@ from agentforge_agent_server import (
     AgentEvent,
     AgentServerClient,
     AgentServerError,
-    AgentSpec,
+    ConversationSpec,
 )
 from agentforge_shared.config import get_settings
 from agentforge_shared.db import session_scope
 from agentforge_shared.enums import AgentStatus, EventType, TaskKind, TaskStatus, WorkspaceStatus
 from agentforge_shared.events import record_event
-from agentforge_shared.models import Agent, Task, Workspace
+from agentforge_shared.models import Agent, Project, Task, Workspace
 from sqlalchemy import select
 
 log = logging.getLogger(__name__)
@@ -61,6 +61,13 @@ class AgentManager:
                 session.expunge(workspace)
             return workspace
 
+    def project_for(self, agent: Agent) -> Project | None:
+        with session_scope() as session:
+            project = session.get(Project, agent.project_id)
+            if project is not None:
+                session.expunge(project)
+            return project
+
     def _client(self, workspace: Workspace) -> AgentServerClient:
         url = workspace.agent_server_url or self.settings.openhands_url
         return self._client_factory(url)
@@ -94,7 +101,15 @@ class AgentManager:
         try:
             with self._client(workspace) as client:
                 session_id = self._ensure_session(client, agent, workspace)
-                event = client.send_message(session_id, self._prompt_for(task, agent))
+                # The message is queued and acknowledged; the work arrives as
+                # events, so the cursor is taken first to avoid replaying them.
+                cursor = self._event_cursor(client, session_id)
+                client.send_message(session_id, self._prompt_for(task, agent))
+                event = client.wait_for_reply(
+                    session_id,
+                    start_id=cursor,
+                    timeout=self.settings.agent_turn_timeout_seconds,
+                )
         except AgentServerError as exc:
             log.error("agent %s failed task %s: %s", agent.name, task.id, exc)
             self._fail(agent, task, str(exc))
@@ -194,29 +209,60 @@ class AgentManager:
     # --- session ----------------------------------------------------------
 
     def _ensure_session(self, client: AgentServerClient, agent: Agent, workspace: Workspace) -> str:
-        """Create the Agent Server agent and conversation once, then reuse them."""
+        """Open the conversation once, then reuse it.
+
+        OpenHands has no agent object: a conversation is the session, and the
+        model is a server setting, so the alias, the gateway and the key are
+        applied before the conversation exists. A server keeps its settings in the
+        pod, which is why they are re-applied rather than assumed.
+        """
         if agent.session_id:
             return agent.session_id
 
-        server_agent = client.create_agent(
-            AgentSpec(
-                name=agent.name,
-                model=agent.model,
-                workspace_id=workspace.namespace,
+        client.configure_model(
+            model=agent.model,
+            base_url=self.settings.llm_gateway_url,
+            api_key=self.settings.llm_gateway_api_key,
+        )
+
+        project = self.project_for(agent)
+        created = client.create_conversation(
+            ConversationSpec(
+                repository=project.repository_url if project else None,
+                branch=agent.branch,
+                instructions=(
+                    f"You are {agent.name}, an autonomous engineer working in the "
+                    f"{agent.branch or 'current'} branch. Report what you changed."
+                ),
                 metadata={
                     "agentforge_agent_id": agent.id,
                     "agentforge_project_id": agent.project_id,
-                    "agentforge_branch": agent.branch,
                 },
             )
         )
-        server_agent_id = str(server_agent.get("id") or server_agent.get("agent_id") or agent.id)
+        session_id = str(created.get("conversation_id") or created.get("id") or "")
+        if not session_id:
+            raise AgentServerError(
+                "agent server did not return a conversation id", detail=str(created)[:500]
+            )
 
-        run = client.start_conversation(server_agent_id)
+        run = client.start_conversation(session_id)
         with session_scope() as session:
             session.get(Agent, agent.id).session_id = run.session_id
-        self._event(agent, EventType.AGENT_STARTED, payload={"session_id": run.session_id})
+        self._event(
+            agent,
+            EventType.AGENT_STARTED,
+            payload={"session_id": run.session_id, "model": agent.model},
+        )
         return run.session_id
+
+    def _event_cursor(self, client: AgentServerClient, session_id: str) -> int:
+        """The highest event id the server has so far."""
+        try:
+            events = client.events(session_id, limit=200)
+        except AgentServerError:
+            return 0
+        return max((int(event.raw.get("id", 0) or 0) for event in events), default=0)
 
     # --- git --------------------------------------------------------------
 
