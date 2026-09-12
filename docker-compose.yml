@@ -1,0 +1,31 @@
+# Development stack for AI Workbench.
+# The control plane runs on the host for fast iteration; this brings up its
+# dependencies (Postgres, and optionally the LLM gateway).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aiw
+      POSTGRES_PASSWORD: aiw
+      POSTGRES_DB: aiw
+    ports:
+      - "5432:5432"
+    volumes:
+      - aiw-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiw"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    profiles: ["gateway"]
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./deploy/litellm/config.yaml:/app/config.yaml:ro
+
+volumes:
+  aiw-pgdata:

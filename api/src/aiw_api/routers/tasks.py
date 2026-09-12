@@ -1,0 +1,98 @@
+"""Task endpoints."""
+
+from __future__ import annotations
+
+from aiw_shared.models import Agent, Project, Task
+from aiw_shared.schemas import TaskCreate, TaskRead
+from fastapi import APIRouter, HTTPException, status
+from sqlalchemy import select
+
+from ..deps import DbSession
+from ..services import create_task
+
+router = APIRouter(tags=["tasks"])
+
+
+def _get_task(session, task_id: str) -> Task:
+    task = session.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
+    return task
+
+
+@router.get("/tasks", response_model=list[TaskRead])
+def list_tasks(session: DbSession, project_id: str | None = None, limit: int = 200) -> list[Task]:
+    stmt = select(Task).order_by(Task.created_at.desc()).limit(limit)
+    if project_id:
+        stmt = stmt.where(Task.project_id == project_id)
+    return list(session.scalars(stmt))
+
+
+@router.get("/tasks/{task_id}", response_model=TaskRead)
+def get_task(session: DbSession, task_id: str) -> Task:
+    return _get_task(session, task_id)
+
+
+@router.post(
+    "/projects/{project_id}/tasks",
+    response_model=TaskRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["projects"],
+)
+def create_project_task(session: DbSession, project_id: str, payload: TaskCreate) -> Task:
+    """Queue a unit of work for a project (optionally pinned to one agent)."""
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    if payload.agent_id is not None:
+        agent = session.get(Agent, payload.agent_id)
+        if agent is None or agent.project_id != project.id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "agent does not belong to project")
+    return create_task(session, project, payload.description, payload.agent_id)
+
+
+@router.post(
+    "/agents/{agent_id}/tasks",
+    response_model=TaskRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["agents"],
+)
+def create_agent_task(session: DbSession, agent_id: str, payload: TaskCreate) -> Task:
+    """Queue work directly against one agent."""
+    agent = session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "agent not found")
+    project = session.get(Project, agent.project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    return create_task(session, project, payload.description, agent.id)
+
+
+@router.post("/tasks/{task_id}/cancel", response_model=TaskRead)
+def cancel_task(session: DbSession, task_id: str) -> Task:
+    from aiw_shared.enums import TaskStatus
+
+    task = _get_task(session, task_id)
+    if task.status in (TaskStatus.SUCCEEDED, TaskStatus.CANCELLED):
+        return task
+    task.status = TaskStatus.CANCELLED
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+@router.get("/tasks/{task_id}/events")
+def task_events(session: DbSession, task_id: str) -> dict:
+    from aiw_shared.models import Event
+
+    task = _get_task(session, task_id)
+    events = session.scalars(
+        select(Event).where(Event.task_id == task.id).order_by(Event.created_at)
+    )
+    return {
+        "task_id": task.id,
+        "events": [
+            {"id": e.id, "type": e.type, "payload": e.payload, "created_at": e.created_at}
+            for e in events
+        ],
+    }
