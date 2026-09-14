@@ -136,3 +136,14 @@ export interface FileContent {
   encoding: "utf8" | "base64";
   content: string;
 }
+
+export interface ModelOption {
+  /** The alias an agent stores. */
+  name: string;
+  /** The upstream model behind it, provider prefix stripped. */
+  model: string;
+  reasoning: string | null;
+  local: boolean;
+  /** What the picker shows: the model, and how hard it is asked to think. */
+  label: string;
+}

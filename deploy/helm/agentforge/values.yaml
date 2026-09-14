@@ -387,6 +387,9 @@ llm:
   #:   api_base    — omit for a hosted provider.
   #:   api_key_env — the env var in `existingSecret` holding the key. Omit for
   #:                 an endpoint that needs no auth and set `api_key` instead.
+  #:   reasoning_effort — passed through to the provider, and reported by
+  #:                 /api/v1/models so the picker can name it. Only set it where
+  #:                 the provider honours it, or the label overstates.
   models:
     - name: local-coder
       model: openai/qwen2.5-coder:7b
@@ -398,6 +401,7 @@ llm:
     - name: smart
       model: anthropic/claude-sonnet-4-5
       api_key_env: ANTHROPIC_API_KEY
+      reasoning_effort: high
 
   #: A bundled model server for a local alias. Leave it off when the model
   #: already lives elsewhere on the LAN and point `api_base` at that host.

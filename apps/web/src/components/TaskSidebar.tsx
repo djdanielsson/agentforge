@@ -18,18 +18,36 @@ export function TaskSidebar({ project }: { project: ProjectDetail }) {
     refetchInterval: 3000,
   });
 
-  const cancel = useMutation({
-    mutationFn: (taskId: string) => api.cancelTask(taskId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tasks", project.id] }),
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["tasks", project.id] });
+
+  const cancel = useMutation({ mutationFn: (taskId: string) => api.cancelTask(taskId), onSuccess: refresh });
+  const dismiss = useMutation({ mutationFn: (taskId: string) => api.deleteTask(taskId), onSuccess: refresh });
+  const clearFinished = useMutation({
+    mutationFn: () => api.clearFinishedTasks(project.id),
+    onSuccess: refresh,
   });
 
   const items = tasks.data ?? [];
+  const finished = items.filter((task) =>
+    ["succeeded", "failed", "cancelled", "blocked"].includes(task.status),
+  );
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center border-b border-surface-border px-3 py-1 text-[11px] text-neutral-500">
+      <div className="flex items-center gap-2 border-b border-surface-border px-3 py-1 text-[11px] text-neutral-500">
         <span>queue</span>
-        <span className="ml-auto tabular-nums">{items.length}</span>
+        <span className="tabular-nums">{items.length}</span>
+        {/* Failures used to pile up here, so an old error read as a new one. */}
+        {finished.length > 0 && (
+          <button
+            onClick={() => clearFinished.mutate()}
+            disabled={clearFinished.isPending}
+            title="Dismiss everything that has finished"
+            className="ml-auto rounded border border-surface-border px-1.5 py-0.5 hover:bg-neutral-800 disabled:opacity-40"
+          >
+            clear {finished.length}
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto p-2">
         {items.length === 0 && (
@@ -63,12 +81,20 @@ export function TaskSidebar({ project }: { project: ProjectDetail }) {
                       {task.result}
                     </p>
                   )}
-                  {["queued", "leased", "running"].includes(task.status) && (
+                  {["queued", "leased", "running"].includes(task.status) ? (
                     <button
                       onClick={() => cancel.mutate(task.id)}
                       className="mt-1 rounded border border-surface-border px-1.5 py-0.5 text-[10px] hover:bg-neutral-800"
                     >
                       cancel
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => dismiss.mutate(task.id)}
+                      title="Dismiss"
+                      className="mt-1 rounded border border-surface-border px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-800"
+                    >
+                      dismiss
                     </button>
                   )}
                 </div>

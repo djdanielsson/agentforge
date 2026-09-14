@@ -6,6 +6,7 @@ import type {
   FileContent,
   FileListing,
   GitDiff,
+  ModelOption,
   Project,
   ProjectDetail,
   Task,
@@ -55,7 +56,12 @@ export const api = {
   // Aliases an agent can run on. The gateway owns the list; the API falls back
   // to the aliases this deployment was configured with when it is not up.
   listModels: () =>
-    request<{ models: string[]; source: "gateway" | "config"; default: string }>("/models"),
+    request<{
+      models: ModelOption[];
+      names: string[];
+      source: "gateway" | "config";
+      default: string;
+    }>("/models"),
   sendMessage: (agentId: string, content: string) =>
     request<Agent>(`/agents/${agentId}/messages`, {
       method: "POST",
@@ -79,6 +85,10 @@ export const api = {
     }),
   cancelTask: (taskId: string) =>
     request<Task>(`/tasks/${taskId}/cancel`, { method: "POST" }),
+  // Finished tasks pile up otherwise, and a stale failure reads as a new one.
+  deleteTask: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: "DELETE" }),
+  clearFinishedTasks: (projectId: string) =>
+    request<{ deleted: number }>(`/projects/${projectId}/tasks`, { method: "DELETE" }),
   taskEvents: (taskId: string) =>
     request<{ task_id: string; events: Event[] }>(`/tasks/${taskId}/events`),
 

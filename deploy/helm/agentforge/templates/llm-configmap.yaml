@@ -27,6 +27,9 @@ data:
           {{- with .api_key }}
           api_key: {{ . | quote }}
           {{- end }}
+          {{- with .reasoning_effort }}
+          reasoning_effort: {{ . }}
+          {{- end }}
       {{- end }}
 
     litellm_settings:

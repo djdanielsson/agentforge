@@ -100,6 +100,8 @@ def test_agent_model_can_be_changed_after_creation(client):
 class _FakeGatewayResponse:
     """Just enough of an httpx.Response for the model-list probe."""
 
+    status_code = 200
+
     def __init__(self, payload: dict) -> None:
         self._payload = payload
 
@@ -143,8 +145,17 @@ def test_model_aliases_fall_back_to_config_without_a_gateway(client):
     body = client.get(f"{API}/models").json()
 
     assert body["source"] == "config"
-    assert body["models"] == ["local-coder", "fast", "smart"]
-    assert body["default"] in body["models"]
+    assert body["names"] == ["local-coder", "fast", "smart"]
+    # Without a gateway there is nothing to say about the upstream model, so the
+    # label is the alias rather than an invented one.
+    assert body["models"][0] == {
+        "name": "local-coder",
+        "model": "local-coder",
+        "reasoning": None,
+        "local": False,
+        "label": "local-coder",
+    }
+    assert body["default"] in body["names"]
 
 
 def test_model_aliases_come_from_the_gateway_when_it_answers(client, monkeypatch):
@@ -154,7 +165,7 @@ def test_model_aliases_come_from_the_gateway_when_it_answers(client, monkeypatch
     body = client.get(f"{API}/models").json()
 
     assert body["source"] == "gateway"
-    assert body["models"] == ["smart", "local-coder"]
+    assert body["names"] == ["smart", "local-coder"]
 
 
 def test_the_gateway_probe_presents_the_configured_key(client, monkeypatch):
@@ -179,6 +190,53 @@ def test_an_unknown_model_is_refused_when_the_agent_is_created(client):
     body = resp.json()["detail"]
     assert "unknown model alias" in body["message"]
     assert body["models"] == ["local-coder", "fast", "smart"]
+
+
+def test_the_label_names_the_model_and_the_thinking_level(client, monkeypatch):
+    """An alias like `smart` says nothing; the picker shows what will run."""
+    import types
+
+    from agentforge_api import model_catalog
+
+    detail = {
+        "data": [
+            {
+                "model_name": "smart",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "reasoning_effort": "high",
+                },
+            },
+            {
+                "model_name": "local-coder",
+                "litellm_params": {
+                    "model": "openai/qwen2.5-coder:7b",
+                    "api_base": "http://ollama:11434/v1",
+                },
+            },
+        ]
+    }
+    monkeypatch.setattr(
+        model_catalog.httpx,
+        "get",
+        lambda url, timeout, headers=None: _FakeGatewayResponse(detail),
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "get_settings",
+        lambda: types.SimpleNamespace(
+            llm_gateway_url="http://gateway:4000",
+            llm_gateway_api_key=None,
+            default_agent_model="local-coder",
+            model_aliases=["local-coder"],
+        ),
+    )
+
+    models = client.get(f"{API}/models").json()["models"]
+
+    assert models[0]["label"] == "claude-sonnet-4-5 · thinking: high"
+    assert models[0]["model"] == "claude-sonnet-4-5"
+    assert models[1]["label"] == "qwen2.5-coder:7b · local"
 
 
 def test_validation_follows_the_gateway_rather_than_the_config(client, monkeypatch):

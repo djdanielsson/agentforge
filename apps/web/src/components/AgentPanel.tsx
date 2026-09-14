@@ -76,6 +76,7 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
   // Valid aliases, straight from the API — the same list it validates writes
   // against, so the picker cannot offer something the server would refuse.
   const modelOptions = models.data?.models ?? [];
+  const modelNames = models.data?.names ?? [];
 
   const pendingModel = modelDraft.trim();
   const modelChanged = Boolean(pendingModel) && pendingModel !== selected?.model;
@@ -175,12 +176,14 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
                 >
                   {/* An alias the gateway has since dropped stays visible rather
                       than being silently rewritten to something else. */}
-                  {modelDraft && !modelOptions.includes(modelDraft) && (
+                  {modelDraft && !modelNames.includes(modelDraft) && (
                     <option value={modelDraft}>{modelDraft} — not served</option>
                   )}
-                  {modelOptions.map((alias) => (
-                    <option key={alias} value={alias}>
-                      {alias}
+                  {/* The label names the model and its thinking level: an alias
+                      like `smart` says nothing about what will run. */}
+                  {modelOptions.map((option) => (
+                    <option key={option.name} value={option.name}>
+                      {option.label}
                     </option>
                   ))}
                 </select>

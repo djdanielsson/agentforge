@@ -63,9 +63,25 @@ deployment that has not stood one up yet — it falls back to
 `AGENTFORGE_AGENT_MODEL_ALIASES` and reports `"source": "config"`, so the
 dashboard's model picker always has something to offer:
 
+An entry names the model behind the alias, and how hard that model is asked to
+think — an alias like `smart` says nothing on its own:
+
 ```json
-{"models": ["local-coder", "fast", "smart"], "source": "config", "default": "local-coder"}
+{
+  "models": [
+    {"name": "smart", "model": "claude-sonnet-4-5", "reasoning": "high",
+     "local": false, "label": "claude-sonnet-4-5 · thinking: high"},
+    {"name": "local-coder", "model": "qwen2.5-coder:7b", "reasoning": null,
+     "local": true, "label": "qwen2.5-coder:7b · local"}
+  ],
+  "names": ["smart", "local-coder"],
+  "source": "gateway",
+  "default": "local-coder"
+}
 ```
+
+`source: "config"` means the gateway could not be reached, so the models are the
+configured aliases with nothing known about what they resolve to.
 
 The same list is enforced, not merely advertised: creating an agent (or changing
 its model) with an alias the gateway does not serve is refused with a `422` that
@@ -503,3 +519,8 @@ agentforge watch demo
 ```
 
 `--url` defaults to `AGENTFORGE_API_URL`; `--key` to `AGENTFORGE_API_KEY`.
+
+`DELETE /api/v1/tasks/{id}` dismisses a finished task and
+`DELETE /api/v1/projects/{id}/tasks` clears them all for a project. Finished work
+is otherwise kept forever, and a stale failure reads like a fresh one. The event
+log keeps the history either way.

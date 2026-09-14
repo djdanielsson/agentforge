@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from agentforge_shared.enums import TaskStatus
 from agentforge_shared.models import Agent, Project, Task
 from agentforge_shared.schemas import TaskCreate, TaskRead
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from ..deps import DbSession
 from ..security import Principal, ensure_project_access, require_write
@@ -117,3 +118,36 @@ def task_events(session: DbSession, task_id: str) -> dict:
             for e in events
         ],
     }
+
+
+#: States a task can be dismissed from. Anything still in flight must be
+#: cancelled first: deleting work someone is doing hides it rather than stopping
+#: it.
+TERMINAL_STATUSES = (
+    TaskStatus.SUCCEEDED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+    TaskStatus.BLOCKED,
+)
+
+
+@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_task(session: DbSession, task_id: str) -> None:
+    task = _get_task(session, task_id)
+    if task.status not in TERMINAL_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"task is {task.status}; cancel it before dismissing it",
+        )
+    session.delete(task)
+    session.commit()
+
+
+@router.delete("/projects/{project_id}/tasks")
+def clear_finished_tasks(session: DbSession, project_id: str) -> dict:
+    """Drop the finished tasks. The event log keeps the history."""
+    result = session.execute(
+        delete(Task).where(Task.project_id == project_id, Task.status.in_(TERMINAL_STATUSES))
+    )
+    session.commit()
+    return {"deleted": result.rowcount or 0}
