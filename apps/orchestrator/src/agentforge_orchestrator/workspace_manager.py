@@ -83,6 +83,7 @@ class WorkspaceManager:
             revision=project.default_branch,
             image=self.settings.workspace_image,
             agent_image=self.settings.workspace_agent_image,
+            agent_runtime=self.settings.workspace_agent_runtime,
             cpu_request=self.settings.workspace_cpu_request,
             memory_request=self.settings.workspace_memory_request,
             storage=self.settings.workspace_storage,

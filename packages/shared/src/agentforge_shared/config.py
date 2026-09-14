@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     workspace_namespace_prefix: str = "af"
     workspace_image: str = "ghcr.io/coder/code-server:latest"
     workspace_agent_image: str = "ghcr.io/all-hands-ai/openhands:latest"
+    #: How the OpenHands server runs its agent. `local` runs it in the pod that
+    #: already sandboxes it; `docker` wants a Docker socket the pod does not have,
+    #: so a conversation sits in STARTING forever and every message 500s.
+    workspace_agent_runtime: str = "local"
     #: uid/gid for the agent runtime. 0 means root, which the OpenHands image
     #: requires: its entrypoint exits with "must run as root" otherwise. A
     #: rootless agent image would set this to its own user.

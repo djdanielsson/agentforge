@@ -110,6 +110,30 @@ def test_the_agent_runtime_runs_as_root_because_its_image_requires_it(manifests,
     assert agent.security_context.run_as_non_root is None
 
 
+def _env(container) -> dict[str, str]:
+    return {var.name: var.value for var in container.env or []}
+
+
+def test_the_agent_runs_in_the_pod_rather_than_reaching_for_docker(manifests, permissions):
+    """Deployed with the default, a conversation never starts.
+
+    OpenHands picks its Docker runtime, finds no socket in the pod, and the
+    conversation sits in STARTING while the agent server answers 500 to every
+    message. `local` is the runtime that matches the isolation model: the pod
+    already is the sandbox.
+    """
+    pod = _pod(manifests, permissions)
+    agent = next(c for c in pod.spec.containers if c.name == "openhands")
+    assert _env(agent)["RUNTIME"] == "local"
+
+
+def test_the_runtime_is_a_setting_rather_than_a_hardcoded_env_var(manifests, permissions):
+    """An image that does want a socket can still be told to use one."""
+    pod = _pod(manifests, permissions, agent_runtime="docker")
+    agent = next(c for c in pod.spec.containers if c.name == "openhands")
+    assert _env(agent)["RUNTIME"] == "docker"
+
+
 def test_root_gets_only_the_capability_it_needs(manifests, permissions):
     """CAP_DAC_OVERRIDE is not decorative.
 

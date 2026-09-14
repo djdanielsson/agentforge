@@ -96,6 +96,9 @@ def build_pod(
     *,
     image: str,
     agent_image: str,
+    #: How the agent server runs its agent inside the pod. `local` keeps it in the
+    #: pod, which is already the sandbox.
+    agent_runtime: str = "local",
     pvc_name: str,
     permissions: AgentPermissions,
     secrets: list[ResolvedSecret] | None = None,
@@ -174,6 +177,10 @@ def build_pod(
 
     warnings: list[str] = []
     env = [
+        # The pod is the sandbox: the agent runs inside it. Left unset, OpenHands
+        # picks its Docker runtime, finds no socket, and the conversation never
+        # leaves STARTING.
+        client.V1EnvVar(name="RUNTIME", value=agent_runtime),
         client.V1EnvVar(name="DEFAULT_WORKSPACE", value=WORKSPACE_MOUNT),
         client.V1EnvVar(name="AGENTFORGE_PROJECT", value=namespace),
         client.V1EnvVar(name="GIT_PUSH_ENABLED", value="true" if permissions.git.push else "false"),

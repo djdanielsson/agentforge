@@ -129,6 +129,7 @@ class KubernetesProvider(WorkspaceProvider):
             spec.reference,
             image=spec.image,
             agent_image=spec.agent_image,
+            agent_runtime=spec.agent_runtime,
             pvc_name=names["pvc"],
             permissions=spec.permissions,
             secrets=spec.secrets,

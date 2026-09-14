@@ -76,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
             revision=args.revision,
             image=settings.workspace_image,
             agent_image=settings.workspace_agent_image,
+            agent_runtime=settings.workspace_agent_runtime,
             storage=settings.workspace_storage,
             storage_class=settings.workspace_storage_class,
             code_server_port=settings.workspace_code_server_port,

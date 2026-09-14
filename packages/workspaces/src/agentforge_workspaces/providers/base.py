@@ -37,6 +37,10 @@ class WorkspaceSpec:
     revision: str = "main"
 
     image: str = "ghcr.io/coder/code-server:latest"
+    #: How the agent server runs its agent inside the pod. `local` keeps it in the
+    #: pod, which is already the sandbox; `docker` needs a socket the pod has not
+    #: got, and leaves every conversation stuck in STARTING.
+    agent_runtime: str = "local"
     agent_image: str = "ghcr.io/all-hands-ai/openhands:latest"
 
     cpu_request: str = "500m"
