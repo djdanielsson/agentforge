@@ -5,6 +5,7 @@ import type * as Monaco from "monaco-editor";
 
 import { api } from "../api/client";
 import type { FileEntry, ProjectDetail } from "../types";
+import { Divider, useDragSize } from "./Splitter";
 import { Terminal } from "./Terminal";
 import "../monaco";
 
@@ -53,7 +54,11 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
   const [dir, setDir] = useState("/workspace");
   const [openPath, setOpenPath] = useState<string | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
-  const [showTerminal, setShowTerminal] = useState(true);
+
+  // Both panes are draggable and collapsible: a file tree that is always the
+  // same width is wrong for every project except the one it was sized for.
+  const tree = useDragSize({ initial: 256, min: 160, max: 520, axis: "x" });
+  const terminal = useDragSize({ initial: 240, min: 120, max: 640, axis: "y", invert: true });
 
   const listing = useQuery({
     queryKey: ["files", project.id, dir],
@@ -99,56 +104,74 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
   }
 
   return (
-    <div className="flex h-full">
-      <div className="flex w-64 shrink-0 flex-col border-r border-surface-border">
-        <div className="flex items-center gap-1 border-b border-surface-border px-2 py-1 text-[10px] text-neutral-500">
-          <button
-            onClick={() => setDir(parentOf(dir))}
-            disabled={dir === root}
-            className="rounded px-1 hover:bg-neutral-800 disabled:opacity-30"
-            title="Parent directory"
-          >
-            ..
-          </button>
-          <span className="truncate" title={dir}>
-            {dir}
-          </span>
-        </div>
-        <div className="flex-1 overflow-y-auto p-1">
-          {listing.isLoading && <p className="px-2 py-1 text-xs text-neutral-600">Loading…</p>}
-          {listing.error && (
-            <p className="px-2 py-1 text-xs text-red-400">{String(listing.error)}</p>
-          )}
-          {listing.data && entries.length === 0 && (
-            <p className="px-2 py-1 text-xs text-neutral-600">Empty directory.</p>
-          )}
-          {entries.map((entry) => (
-            <button
-              key={entry.path}
-              onClick={() =>
-                entry.type === "dir" ? setDir(entry.path) : setOpenPath(entry.path)
-              }
-              className={
-                "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs " +
-                (entry.path === openPath
-                  ? "bg-neutral-800 text-neutral-100"
-                  : "text-neutral-400 hover:bg-neutral-900")
-              }
-            >
-              <span className="w-3 text-neutral-600">
-                {entry.type === "dir" ? "/" : entry.type === "symlink" ? "@" : "·"}
+    <div className="flex h-full min-h-0">
+      {tree.collapsed ? (
+        <button
+          onClick={tree.toggle}
+          title="Show files"
+          className="w-6 shrink-0 border-r border-surface-border text-xs text-neutral-500 hover:bg-neutral-900"
+        >
+          »
+        </button>
+      ) : (
+        <>
+          <div style={{ width: tree.size }} className="flex shrink-0 flex-col border-r border-surface-border">
+            <div className="flex items-center gap-1 border-b border-surface-border px-2 py-1 text-[10px] text-neutral-500">
+              <button
+                onClick={() => setDir(parentOf(dir))}
+                disabled={dir === root}
+                className="rounded px-1 hover:bg-neutral-800 disabled:opacity-30"
+                title="Parent directory"
+              >
+                ..
+              </button>
+              <span className="truncate" title={dir}>
+                {dir}
               </span>
-              <span className="truncate">{entry.name}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+              <button
+                onClick={tree.toggle}
+                title="Collapse files"
+                className="ml-auto rounded px-1 hover:bg-neutral-800"
+              >
+                «
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-1">
+              {listing.isLoading && <p className="px-2 py-1 text-xs text-neutral-600">Loading…</p>}
+              {listing.error && (
+                <p className="px-2 py-1 text-xs text-red-400">{String(listing.error)}</p>
+              )}
+              {listing.data && entries.length === 0 && (
+                <p className="px-2 py-1 text-xs text-neutral-600">Empty directory.</p>
+              )}
+              {entries.map((entry) => (
+                <button
+                  key={entry.path}
+                  onClick={() =>
+                    entry.type === "dir" ? setDir(entry.path) : setOpenPath(entry.path)
+                  }
+                  className={
+                    "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs " +
+                    (entry.path === openPath
+                      ? "bg-neutral-800 text-neutral-100"
+                      : "text-neutral-400 hover:bg-neutral-900")
+                  }
+                >
+                  <span className="w-3 text-neutral-600">
+                    {entry.type === "dir" ? "/" : entry.type === "symlink" ? "@" : "·"}
+                  </span>
+                  <span className="truncate">{entry.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <Divider axis="x" onPointerDown={tree.start} />
+        </>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2 border-b border-surface-border px-3 py-1 text-[11px] text-neutral-500">
-          <span className="truncate text-neutral-300">
-            {openPath ?? "Select a file"}
-          </span>
+          <span className="truncate text-neutral-300">{openPath ?? "Select a file"}</span>
           {dirty && <span className="text-amber-400">unsaved</span>}
           <button
             onClick={() => save.mutate()}
@@ -159,10 +182,10 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
           </button>
           {save.isError && <span className="text-red-400">{String(save.error)}</span>}
           <button
-            onClick={() => setShowTerminal((shown) => !shown)}
+            onClick={terminal.toggle}
             className="ml-auto rounded border border-surface-border px-2 py-0.5 hover:bg-neutral-800"
           >
-            {showTerminal ? "hide terminal" : "show terminal"}
+            {terminal.collapsed ? "show terminal" : "hide terminal"}
           </button>
         </div>
 
@@ -195,10 +218,15 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
           )}
         </div>
 
-        {showTerminal && (
-          <div className="h-64 shrink-0 border-t border-surface-border">
-            <Terminal url={api.terminalUrl(project.id)} />
-          </div>
+        {!terminal.collapsed && (
+          <>
+            <Divider axis="y" onPointerDown={terminal.start} />
+            <div style={{ height: terminal.size }} className="shrink-0 overflow-hidden">
+              {/* Re-opening the terminal starts a fresh shell: the pty dies with
+                  the socket, and a stale one would be worse than a new prompt. */}
+              <Terminal url={api.terminalUrl(project.id)} />
+            </div>
+          </>
         )}
       </div>
     </div>

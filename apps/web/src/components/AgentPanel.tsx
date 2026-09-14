@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import type { ProjectDetail } from "../types";
+import { Divider, useDragSize } from "./Splitter";
 import { StatusDot } from "./StatusDot";
 
 export function AgentPanel({ project }: { project: ProjectDetail }) {
@@ -18,6 +19,8 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
 
   const agents = project.agents;
   const selected = agents.find((agent) => agent.id === selectedId) ?? agents[0] ?? null;
+
+  const sidebar = useDragSize({ initial: 224, min: 140, max: 420, axis: "x" });
 
   // An agent's model is a logical alias resolved by the LiteLLM gateway, so the
   // suggestions come from the API rather than a list baked into the bundle.
@@ -86,7 +89,20 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
 
   return (
     <div className="flex h-full">
-      <div className="flex w-56 shrink-0 flex-col border-r border-surface-border">
+      {sidebar.collapsed ? (
+        <button
+          onClick={sidebar.toggle}
+          title="Show agents"
+          className="w-6 shrink-0 border-r border-surface-border text-xs text-neutral-500 hover:bg-neutral-900"
+        >
+          »
+        </button>
+      ) : (
+        <>
+          <div
+            style={{ width: sidebar.size }}
+            className="flex shrink-0 flex-col border-r border-surface-border"
+          >
         <div className="flex-1 overflow-y-auto p-2">
           {agents.length === 0 && (
             <p className="px-2 py-1 text-xs text-neutral-500">No agents yet.</p>
@@ -120,6 +136,17 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
             placeholder="+ agent name"
             className="w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-surface-border focus:ring-neutral-600"
           />
+          <div className="flex items-center justify-between text-[10px] text-neutral-500">
+            <span>agents</span>
+            <button
+              type="button"
+              onClick={sidebar.toggle}
+              title="Collapse agents"
+              className="rounded px-1 hover:bg-neutral-800"
+            >
+              «
+            </button>
+          </div>
           <select
             value={newModel}
             onChange={(e) => setNewModel(e.target.value)}
@@ -134,8 +161,11 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
               </option>
             ))}
           </select>
-        </form>
-      </div>
+            </form>
+          </div>
+          <Divider axis="x" onPointerDown={sidebar.start} />
+        </>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         {selected ? (
@@ -235,13 +265,29 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
                 if (draft.trim()) send.mutate(draft);
               }}
             >
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                rows={2}
-                placeholder="Ask the agent to do something…"
-                className="w-full resize-none rounded bg-neutral-900 px-2 py-1.5 text-sm outline-none ring-1 ring-surface-border focus:ring-neutral-600"
-              />
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(event) => {
+                    // Enter sends; Shift+Enter is how a second line gets written.
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      if (draft.trim()) send.mutate(draft);
+                    }
+                  }}
+                  rows={2}
+                  placeholder="Ask the agent to do something…  (Enter sends, Shift+Enter for a new line)"
+                  className="min-w-0 flex-1 resize-none rounded bg-neutral-900 px-2 py-1.5 text-sm outline-none ring-1 ring-surface-border focus:ring-neutral-600"
+                />
+                <button
+                  type="submit"
+                  disabled={!draft.trim() || send.isPending}
+                  className="rounded border border-surface-border px-3 py-1.5 text-xs hover:bg-neutral-800 disabled:opacity-40"
+                >
+                  {send.isPending ? "sending…" : "send"}
+                </button>
+              </div>
             </form>
           </>
         ) : (
