@@ -109,6 +109,31 @@ def test_starting_an_already_started_conversation_is_not_an_error(make_client):
     assert any(url.endswith("/api/conversations/c-1") for url in seen)
 
 
+def test_starting_a_conversation_sends_a_json_body(make_client):
+    """OpenHands declares a body on /start; sending none is a 422, not an empty object."""
+    seen = {}
+
+    def handler(request):
+        seen["body"] = request.content
+        return httpx.Response(200, json={"conversation_id": "c-1", "status": "STARTING"})
+
+    make_client(handler).start_conversation("c-1")
+
+    assert json.loads(seen["body"]) == {}
+
+
+def test_start_can_declare_the_git_providers(make_client):
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"conversation_id": "c-1"})
+
+    make_client(handler).start_conversation("c-1", providers_set=["github"])
+
+    assert seen["body"] == {"providers_set": ["github"]}
+
+
 def test_send_message_posts_the_turn_and_returns_nothing(make_client):
     captured = {}
 

@@ -179,15 +179,26 @@ class AgentServerClient:
             data = data.get("items", data.get("conversations", []))
         return list(data)
 
-    def start_conversation(self, session_id: str) -> AgentRun:
+    def start_conversation(
+        self, session_id: str, *, providers_set: list[str] | None = None
+    ) -> AgentRun:
         """Start a conversation, or report the one already running.
 
-        Creating a conversation can start it immediately, and starting one twice
-        is a 4xx rather than an error worth failing a task over.
+        Creating a conversation already starts it, so this is usually a no-op —
+        and it still has to carry a JSON body: OpenHands declares one, and a
+        request with no body at all is a 422 rather than an empty object.
         """
+        body: dict[str, Any] = {}
+        if providers_set:
+            body["providers_set"] = providers_set
         try:
             data = (
-                self._request("POST", self._path("conversation_start", session_id=session_id)) or {}
+                self._request(
+                    "POST",
+                    self._path("conversation_start", session_id=session_id),
+                    json=body,
+                )
+                or {}
             )
         except AgentServerError as exc:
             if exc.status_code in (400, 409):
