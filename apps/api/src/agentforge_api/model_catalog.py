@@ -15,8 +15,10 @@ yet.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from agentforge_shared.config import get_settings
@@ -34,6 +36,29 @@ GATEWAY_TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 30.0
 
 _cache: tuple[float, list[dict[str, Any]], str] | None = None
+
+
+#: Hosts that are on this network rather than on the internet. A bare hostname
+#: with no dot is cluster-local (`agentforge-ollama`); the rest are the private
+#: ranges and the usual in-cluster suffixes.
+_PRIVATE_HOST = re.compile(r"^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.)")
+
+
+def _is_local(api_base: str | None) -> bool:
+    """Whether the endpoint is on this network.
+
+    Not "does it have an api_base": the cloud aliases have one too, and calling a
+    hosted model local is the kind of label that stops being true the moment
+    someone reads it.
+    """
+    if not api_base:
+        return False
+    host = urlparse(api_base).hostname or api_base.split("/")[0].split(":")[0]
+    if not host:
+        return False
+    if host.endswith((".local", ".svc", ".svc.cluster.local")) or _PRIVATE_HOST.match(host):
+        return True
+    return "." not in host
 
 
 def _display_model(upstream: str) -> str:
@@ -61,7 +86,7 @@ def _describe(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         upstream = str(params.get("model") or name)
         model = _display_model(upstream)
         reasoning = params.get("reasoning_effort")
-        local = bool(params.get("api_base"))
+        local = _is_local(params.get("api_base"))
         described.append(
             {
                 "name": name,

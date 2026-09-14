@@ -214,6 +214,15 @@ def test_the_label_names_the_model_and_the_thinking_level(client, monkeypatch):
                     "api_base": "http://ollama:11434/v1",
                 },
             },
+            {
+                # A hosted endpoint has an api_base too. Calling it local because
+                # of that is how a label stops being true.
+                "model_name": "cloud",
+                "litellm_params": {
+                    "model": "openai/deepseek-v4.1-flash",
+                    "api_base": "https://opencode.ai/zen/go/v1",
+                },
+            },
         ]
     }
     monkeypatch.setattr(
@@ -237,6 +246,8 @@ def test_the_label_names_the_model_and_the_thinking_level(client, monkeypatch):
     assert models[0]["label"] == "claude-sonnet-4-5 · thinking: high"
     assert models[0]["model"] == "claude-sonnet-4-5"
     assert models[1]["label"] == "qwen2.5-coder:7b · local"
+    assert models[2]["label"] == "deepseek-v4.1-flash"
+    assert models[2]["local"] is False
 
 
 def test_validation_follows_the_gateway_rather_than_the_config(client, monkeypatch):
