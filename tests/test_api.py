@@ -201,6 +201,25 @@ def test_validation_follows_the_gateway_rather_than_the_config(client, monkeypat
     assert accepted.json()["model"] == "smart"
 
 
+def test_a_chat_message_also_queues_work(client):
+    """The transcript and the queue are one conversation: sending is a request."""
+    project = make_project(client, "ChatQueue")
+    agent = client.post(f"{API}/projects/{project['id']}/agents", json={"name": "Pair"}).json()
+
+    resp = client.post(f"{API}/agents/{agent['id']}/messages", json={"content": "add /health"})
+    assert resp.status_code == 202, resp.text
+
+    conversation = client.get(f"{API}/agents/{agent['id']}/conversation").json()
+    assert conversation["messages"] == [{"role": "user", "content": "add /health"}]
+
+    tasks = client.get(f"{API}/tasks?project_id={project['id']}").json()
+    assert len(tasks) == 1
+    assert tasks[0]["description"] == "add /health"
+    assert tasks[0]["agent_id"] == agent["id"]
+    assert tasks[0]["status"] == "queued"
+    assert tasks[0]["kind"] == "implement"
+
+
 def test_an_unknown_model_is_refused_when_the_agent_is_updated(client, monkeypatch):
     """Editing an agent's model is the other way a bad alias could get in."""
     _gateway_serves(monkeypatch, "smart", "local-coder")

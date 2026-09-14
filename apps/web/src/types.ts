@@ -78,6 +78,8 @@ export interface Task {
   project_id: string;
   agent_id: string | null;
   description: string;
+  kind: "implement" | "test" | "review" | "deploy";
+  priority: "low" | "normal" | "high";
   status: TaskStatus;
   position: number;
   attempts: number;

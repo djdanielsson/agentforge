@@ -200,7 +200,7 @@ the size it was opened with.
 | PATCH | `/api/v1/agents/{id}` | name, model, branch, status, policy |
 | POST | `/api/v1/agents/{id}/stop` | stop the agent |
 | POST | `/api/v1/agents/{id}/restart` | clear the agent session and start a new one |
-| POST | `/api/v1/agents/{id}/messages` | `202`; append a human turn |
+| POST | `/api/v1/agents/{id}/messages` | `202`; append a human turn **and** queue it as a task |
 | GET | `/api/v1/agents/{id}/conversation` | `{"agent_id","messages":[...]}` |
 | GET | `/api/v1/agents/{id}/permissions` | the effective permission policy |
 | POST | `/api/v1/agents/{id}/permissions` | answer a permission request |

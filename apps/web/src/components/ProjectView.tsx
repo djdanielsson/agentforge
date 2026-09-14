@@ -6,10 +6,9 @@ import { useEventStream } from "../hooks/useEventStream";
 import { AgentPanel } from "./AgentPanel";
 import { DiffPanel } from "./DiffPanel";
 import { StatusDot } from "./StatusDot";
-import { TaskPanel } from "./TaskPanel";
 import { WorkspaceFrame } from "./WorkspaceFrame";
 
-type Tab = "editor" | "agent" | "tasks" | "diff";
+type Tab = "editor" | "agent" | "diff";
 
 export function ProjectView({ projectId }: { projectId: string }) {
   const [tab, setTab] = useState<Tab>("agent");
@@ -51,7 +50,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
       </header>
 
       <nav className="flex gap-1 border-b border-surface-border px-3 py-1.5">
-        {(["editor", "agent", "tasks", "diff"] as Tab[]).map((name) => (
+        {(["editor", "agent", "diff"] as Tab[]).map((name) => (
           <button
             key={name}
             onClick={() => setTab(name)}
@@ -70,7 +69,6 @@ export function ProjectView({ projectId }: { projectId: string }) {
       <section className="min-h-0 flex-1">
         {tab === "editor" && <WorkspaceFrame project={data} />}
         {tab === "agent" && <AgentPanel project={data} />}
-        {tab === "tasks" && <TaskPanel project={data} />}
         {tab === "diff" && <DiffPanel project={data} />}
       </section>
 

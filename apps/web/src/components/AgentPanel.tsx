@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ProjectDetail } from "../types";
 import { Divider, useDragSize } from "./Splitter";
+import { TaskSidebar } from "./TaskSidebar";
 import { StatusDot } from "./StatusDot";
 
 export function AgentPanel({ project }: { project: ProjectDetail }) {
@@ -21,6 +22,8 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
   const selected = agents.find((agent) => agent.id === selectedId) ?? agents[0] ?? null;
 
   const sidebar = useDragSize({ initial: 224, min: 140, max: 420, axis: "x" });
+  // The queue is on the right, so dragging its divider left makes it wider.
+  const queue = useDragSize({ initial: 260, min: 180, max: 520, axis: "x", invert: true });
 
   // An agent's model is a logical alias resolved by the LiteLLM gateway, so the
   // suggestions come from the API rather than a list baked into the bundle.
@@ -71,6 +74,7 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
     onSuccess: () => {
       setDraft("");
       queryClient.invalidateQueries({ queryKey: ["conversation", selected?.id] });
+      queryClient.invalidateQueries({ queryKey: ["tasks", project.id] });
     },
   });
 
@@ -214,6 +218,12 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
               </form>
               <span className="text-neutral-600">branch: {selected.branch}</span>
               <button
+                onClick={queue.toggle}
+                className="rounded border border-surface-border px-2 py-0.5 hover:bg-neutral-800"
+              >
+                {queue.collapsed ? "show queue" : "hide queue"}
+              </button>
+              <button
                 onClick={() => restart.mutate()}
                 disabled={restart.isPending}
                 title="Start a new session, keeping the workspace"
@@ -296,6 +306,23 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
           </div>
         )}
       </div>
+
+      {queue.collapsed ? (
+        <button
+          onClick={queue.toggle}
+          title="Show queue"
+          className="w-6 shrink-0 border-l border-surface-border text-xs text-neutral-500 hover:bg-neutral-900"
+        >
+          «
+        </button>
+      ) : (
+        <>
+          <Divider axis="x" onPointerDown={queue.start} />
+          <div style={{ width: queue.size }} className="shrink-0 border-l border-surface-border">
+            <TaskSidebar project={project} />
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agentforge_shared.enums import AgentStatus, EventType
-from agentforge_shared.models import Agent
+from agentforge_shared.enums import AgentStatus, EventType, Priority, TaskKind
+from agentforge_shared.models import Agent, Project
 from agentforge_shared.permissions import AgentPermissions
 from agentforge_shared.schemas import (
     AgentMessageIn,
@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from ..deps import DbSession
-from ..services import record_event
+from ..services import create_task, record_event
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -106,8 +106,18 @@ def stop_agent(session: DbSession, agent_id: str) -> Agent:
 
 @router.post("/{agent_id}/messages", response_model=AgentRead, status_code=status.HTTP_202_ACCEPTED)
 def post_message(session: DbSession, agent_id: str, payload: AgentMessageIn) -> Agent:
-    """Record a human turn. The orchestrator forwards it to the agent runtime."""
+    """Record a human turn **and** queue it as work.
+
+    The transcript and the queue are one conversation seen from two sides. The
+    turn is stored so the chat reads in order, and a task is queued so the
+    orchestrator actually forwards it to the runtime — recording alone produced a
+    message that nothing acted on.
+    """
     agent = _get_agent(session, agent_id)
+    project = session.get(Project, agent.project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+
     conversation = list(agent.conversation or [])
     conversation.append({"role": "user", "content": payload.content})
     agent.conversation = conversation
@@ -119,6 +129,17 @@ def post_message(session: DbSession, agent_id: str, payload: AgentMessageIn) -> 
         agent_id=agent.id,
         payload={"role": "user", "content": payload.content},
     )
+
+    # Every message is a unit of work: one execution path, no parallel queue.
+    create_task(
+        session,
+        project,
+        payload.content,
+        agent.id,
+        kind=TaskKind.IMPLEMENT,
+        priority=Priority.NORMAL,
+    )
+
     session.commit()
     session.refresh(agent)
     return agent
