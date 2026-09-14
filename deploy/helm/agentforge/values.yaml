@@ -395,13 +395,25 @@ llm:
       model: openai/qwen2.5-coder:7b
       api_base: http://agentforge-ollama:11434/v1
       api_key: "ollama"
+    # Cloud models, through the OpenCode Go gateway. They are listed under the
+    # roles they play rather than the provider that serves them, and the picker
+    # labels each one with the model it resolves to.
+    #
+    # OpenAI and Anthropic used to sit here. Neither key was ever provided, so
+    # every call to those aliases failed authentication; these answer.
     - name: fast
-      model: openai/gpt-4o-mini
-      api_key_env: OPENAI_API_KEY
+      model: openai/deepseek-v4-flash
+      api_base: https://opencode.ai/zen/go/v1
+      api_key_env: OPENCODE_GO_API_KEY
+      extra_headers:
+        # Required: without it the provider rejects the call as unroutable.
+        x-opencode-session: agentforge
     - name: smart
-      model: anthropic/claude-sonnet-4-5
-      api_key_env: ANTHROPIC_API_KEY
-      reasoning_effort: high
+      model: openai/deepseek-v4.1-flash
+      api_base: https://opencode.ai/zen/go/v1
+      api_key_env: OPENCODE_GO_API_KEY
+      extra_headers:
+        x-opencode-session: agentforge
 
   #: A bundled model server for a local alias. Leave it off when the model
   #: already lives elsewhere on the LAN and point `api_base` at that host.

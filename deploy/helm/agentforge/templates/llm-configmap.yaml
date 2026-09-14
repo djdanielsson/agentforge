@@ -30,6 +30,9 @@ data:
           {{- with .reasoning_effort }}
           reasoning_effort: {{ . }}
           {{- end }}
+          {{- with .extra_headers }}
+          extra_headers: {{ toJson . }}
+          {{- end }}
       {{- end }}
 
     litellm_settings:
