@@ -15,7 +15,6 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
   const [selectedId, setSelectedId] = useState<string | null>(project.agents[0]?.id ?? null);
   const [draft, setDraft] = useState("");
   const [newAgent, setNewAgent] = useState("");
-  const [newModel, setNewModel] = useState("");
   const [modelDraft, setModelDraft] = useState("");
 
   const agents = project.agents;
@@ -47,13 +46,9 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
 
   const addAgent = useMutation({
     mutationFn: () =>
-      api.createAgent(project.id, {
-        name: newAgent,
-        model: newModel.trim() || undefined,
-      }),
+      api.createAgent(project.id, { name: newAgent }),
     onSuccess: (agent) => {
       setNewAgent("");
-      setNewModel("");
       setSelectedId(agent.id);
       refresh();
     },
@@ -81,12 +76,6 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
   // Valid aliases, straight from the API — the same list it validates writes
   // against, so the picker cannot offer something the server would refuse.
   const modelOptions = models.data?.models ?? [];
-
-  useEffect(() => {
-    if (!newModel && models.data) {
-      setNewModel(models.data.default ?? models.data.models[0] ?? "");
-    }
-  }, [models.data, newModel]);
 
   const pendingModel = modelDraft.trim();
   const modelChanged = Boolean(pendingModel) && pendingModel !== selected?.model;
@@ -151,20 +140,9 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
               «
             </button>
           </div>
-          <select
-            value={newModel}
-            onChange={(e) => setNewModel(e.target.value)}
-            disabled={modelOptions.length === 0}
-            title="The model gateway resolves this alias to a real model"
-            className="w-full rounded bg-neutral-900 px-2 py-1 text-xs outline-none ring-1 ring-surface-border focus:ring-neutral-600 disabled:opacity-50"
-          >
-            {modelOptions.length === 0 && <option value="">no models available</option>}
-            {modelOptions.map((alias) => (
-              <option key={alias} value={alias}>
-                {alias}
-              </option>
-            ))}
-          </select>
+          {/* The model lives above the chat, on the agent you already selected:
+              two pickers for one field was one too many. A new agent starts on
+              the gateway's default and is pointed elsewhere from there. */}
             </form>
           </div>
           <Divider axis="x" onPointerDown={sidebar.start} />

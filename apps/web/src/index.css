@@ -16,3 +16,12 @@ body,
 .pane-fill {
   @apply h-full w-full border-0 bg-black;
 }
+
+/* Changed lines, painted into the editor rather than shown in a diff view. */
+.diff-line-added {
+  background: rgba(16, 185, 129, 0.12);
+}
+.diff-line-glyph {
+  border-left: 3px solid rgba(16, 185, 129, 0.9);
+  margin-left: 3px;
+}

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Editor from "@monaco-editor/react";
-import type * as Monaco from "monaco-editor";
+import * as monaco from "monaco-editor";
 
 import { api } from "../api/client";
+import { addedLines } from "../diff";
 import type { FileEntry, ProjectDetail } from "../types";
 import { Divider, useDragSize } from "./Splitter";
 import { Terminal } from "./Terminal";
@@ -40,6 +41,10 @@ function parentOf(dir: string): string {
   return parts.length ? `/${parts.join("/")}` : "/";
 }
 
+function workspacePath(repoPath: string): string {
+  return repoPath.startsWith("/") ? repoPath : `/workspace/${repoPath}`;
+}
+
 // The workspace editor and terminal, native to the app.
 //
 // The workspace pod is not reachable from a browser — `code_server_url` is a
@@ -72,6 +77,16 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
     enabled: ready && Boolean(openPath),
   });
 
+  // The working-tree diff is what the editor marks: a branch diff would hide
+  // everything the agent has not committed yet.
+  const changes = useQuery({
+    queryKey: ["diff", project.id, "worktree"],
+    queryFn: () => api.gitDiff(project.id, true),
+    enabled: ready,
+    refetchInterval: 15000,
+    retry: false,
+  });
+
   // Seed the editor from the server whenever a different file arrives.
   useEffect(() => {
     setDraft(file.data?.encoding === "utf8" ? file.data.content : null);
@@ -79,14 +94,60 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
 
   const save = useMutation({
     mutationFn: () => api.writeFile(project.id, openPath!, draft ?? ""),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["file", project.id, openPath] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["file", project.id, openPath] });
+      queryClient.invalidateQueries({ queryKey: ["diff", project.id, "worktree"] });
+    },
   });
 
   const dirty = draft !== null && draft !== file.data?.content;
   const entries: FileEntry[] = listing.data?.entries ?? [];
   const root = listing.data?.root ?? "/workspace";
 
+  // repo path -> summary, for the tree badges and the open file's count.
+  const changedFiles = useMemo(() => {
+    const map = new Map<string, { status: string; additions: number; deletions: number }>();
+    for (const change of changes.data?.files ?? []) {
+      map.set(workspacePath(change.path), {
+        status: change.status,
+        additions: change.additions,
+        deletions: change.deletions,
+      });
+    }
+    return map;
+  }, [changes.data]);
+
+  const changedLines = useMemo(() => {
+    if (!openPath || !changes.data?.diff) return [];
+    return addedLines(changes.data.diff, openPath);
+  }, [openPath, changes.data]);
+
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const decorations = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
+
+  // Repaint the marks whenever the file, its text or the diff moves. Monaco
+  // keeps decorations in its own layer, so they survive typing but not a
+  // different model — hence the dependency on the path as well.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (!decorations.current) {
+      decorations.current = editor.createDecorationsCollection([]);
+    }
+    decorations.current.set(
+      changedLines.map((line) => ({
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: true,
+          className: "diff-line-added",
+          linesDecorationsClassName: "diff-line-glyph",
+        },
+      })),
+    );
+  }, [changedLines, openPath, draft]);
+
   const editorTheme = useMemo(() => "vs-dark", []);
+  const openChange = openPath ? changedFiles.get(openPath) : undefined;
 
   if (!workspace) {
     return <Empty text="No workspace record for this project." />;
@@ -128,10 +189,15 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
               <span className="truncate" title={dir}>
                 {dir}
               </span>
+              {changedFiles.size > 0 && (
+                <span className="ml-auto text-emerald-400" title="Files changed since the last commit">
+                  {changedFiles.size}
+                </span>
+              )}
               <button
                 onClick={tree.toggle}
                 title="Collapse files"
-                className="ml-auto rounded px-1 hover:bg-neutral-800"
+                className="rounded px-1 hover:bg-neutral-800"
               >
                 «
               </button>
@@ -144,25 +210,38 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
               {listing.data && entries.length === 0 && (
                 <p className="px-2 py-1 text-xs text-neutral-600">Empty directory.</p>
               )}
-              {entries.map((entry) => (
-                <button
-                  key={entry.path}
-                  onClick={() =>
-                    entry.type === "dir" ? setDir(entry.path) : setOpenPath(entry.path)
-                  }
-                  className={
-                    "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs " +
-                    (entry.path === openPath
-                      ? "bg-neutral-800 text-neutral-100"
-                      : "text-neutral-400 hover:bg-neutral-900")
-                  }
-                >
-                  <span className="w-3 text-neutral-600">
-                    {entry.type === "dir" ? "/" : entry.type === "symlink" ? "@" : "·"}
-                  </span>
-                  <span className="truncate">{entry.name}</span>
-                </button>
-              ))}
+              {entries.map((entry) => {
+                const change = changedFiles.get(entry.path);
+                return (
+                  <button
+                    key={entry.path}
+                    onClick={() =>
+                      entry.type === "dir" ? setDir(entry.path) : setOpenPath(entry.path)
+                    }
+                    className={
+                      "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs " +
+                      (entry.path === openPath
+                        ? "bg-neutral-800 text-neutral-100"
+                        : change
+                          ? "text-neutral-200 hover:bg-neutral-900"
+                          : "text-neutral-400 hover:bg-neutral-900")
+                    }
+                  >
+                    <span className="w-3 text-neutral-600">
+                      {entry.type === "dir" ? "/" : entry.type === "symlink" ? "@" : "·"}
+                    </span>
+                    <span className="truncate">{entry.name}</span>
+                    {change && (
+                      <span className="ml-auto shrink-0 text-[10px] text-emerald-400">
+                        +{change.additions}
+                        {change.deletions > 0 && (
+                          <span className="text-red-400"> −{change.deletions}</span>
+                        )}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <Divider axis="x" onPointerDown={tree.start} />
@@ -173,6 +252,11 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
         <div className="flex items-center gap-2 border-b border-surface-border px-3 py-1 text-[11px] text-neutral-500">
           <span className="truncate text-neutral-300">{openPath ?? "Select a file"}</span>
           {dirty && <span className="text-amber-400">unsaved</span>}
+          {openChange && (
+            <span className="text-emerald-400" title="Lines added since the last commit">
+              {changedLines.length} changed
+            </span>
+          )}
           <button
             onClick={() => save.mutate()}
             disabled={!dirty || save.isPending}
@@ -200,8 +284,9 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
                 theme={editorTheme}
                 value={draft ?? ""}
                 onChange={(value) => setDraft(value ?? "")}
-                onMount={(editor, monaco: typeof Monaco) => {
-                  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
+                onMount={(editor, monacoInstance: typeof monaco) => {
+                  editorRef.current = editor as monaco.editor.IStandaloneCodeEditor;
+                  editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS, () =>
                     save.mutate(),
                   );
                 }}
@@ -210,6 +295,7 @@ export function WorkspaceFrame({ project }: { project: ProjectDetail }) {
                   fontSize: 13,
                   scrollBeyondLastLine: false,
                   renderWhitespace: "selection",
+                  glyphMargin: true,
                 }}
               />
             )

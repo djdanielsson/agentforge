@@ -98,7 +98,8 @@ export const api = {
     return `${proto}//${location.host}${BASE}/projects/${projectId}/terminal`;
   },
 
-  gitDiff: (projectId: string) => request<GitDiff>(`/projects/${projectId}/git/diff`),
+  gitDiff: (projectId: string, worktree = false) =>
+    request<GitDiff>(`/projects/${projectId}/git/diff${worktree ? "?worktree=true" : ""}`),
   gitStatus: (projectId: string) =>
     request<{ status: string; branch: string; log: string }>(
       `/projects/${projectId}/git/status`,

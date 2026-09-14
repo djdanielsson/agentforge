@@ -302,6 +302,34 @@ def test_denied_permission_idles_the_agent(client):
     assert decided["status"] == "idle"
 
 
+def test_a_worktree_diff_compares_against_head(client, monkeypatch):
+    """The editor marks what changed since the last commit, not since the branch point."""
+    from agentforge_shared.db import session_scope
+    from agentforge_shared.enums import WorkspaceStatus
+    from agentforge_shared.models import Workspace
+    from sqlalchemy import select
+
+    project = make_project(client, "WorktreeDiff")
+    with session_scope() as session:
+        row = session.scalars(
+            select(Workspace).where(Workspace.project_id == project["id"])
+        ).first()
+        row.status = WorkspaceStatus.READY
+
+    commands: list[list[str]] = []
+
+    def fake(namespace: str, pod_name: str, command: list[str], **kwargs):
+        commands.append(command)
+        return ""
+
+    monkeypatch.setattr("agentforge_workspaces.providers.kubernetes.exec_in_workspace", fake)
+
+    client.get(f"{API}/projects/{project['id']}/git/diff?worktree=true")
+
+    assert ["git", "diff", "HEAD"] in commands
+    assert ["git", "diff", "--numstat", "HEAD"] in commands
+
+
 def test_git_diff_requires_a_ready_workspace(client):
     project = make_project(client, "NoWorkspace")
     resp = client.get(f"{API}/projects/{project['id']}/git/diff")

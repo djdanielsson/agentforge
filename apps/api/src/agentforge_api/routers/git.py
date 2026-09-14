@@ -40,11 +40,23 @@ def _exec(workspace, command: list[str]) -> str:
 
 
 @router.get("/diff", response_model=GitDiff)
-def get_diff(session: DbSession, project_id: str, base: str | None = None) -> GitDiff:
+def get_diff(
+    session: DbSession,
+    project_id: str,
+    base: str | None = None,
+    worktree: bool = False,
+) -> GitDiff:
+    """Changes against a base branch, or against HEAD with `worktree=true`.
+
+    The editor asks for the working-tree diff: what has changed since the last
+    commit is what someone editing a file wants marked, and a branch diff would
+    hide everything the agent has not committed yet.
+    """
     project, workspace = _workspace(session, project_id)
-    base_ref = base or project.default_branch
-    diff = _exec(workspace, ["git", "diff", f"{base_ref}...HEAD"])
-    names = _exec(workspace, ["git", "diff", "--numstat", f"{base_ref}...HEAD"])
+    base_ref = "HEAD" if worktree else (base or project.default_branch)
+    range_ref = "HEAD" if worktree else f"{base_ref}...HEAD"
+    diff = _exec(workspace, ["git", "diff", range_ref])
+    names = _exec(workspace, ["git", "diff", "--numstat", range_ref])
     files = []
     for line in names.splitlines():
         parts = line.split("\t")

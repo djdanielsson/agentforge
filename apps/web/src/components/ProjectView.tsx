@@ -4,11 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useEventStream } from "../hooks/useEventStream";
 import { AgentPanel } from "./AgentPanel";
-import { DiffPanel } from "./DiffPanel";
 import { StatusDot } from "./StatusDot";
 import { WorkspaceFrame } from "./WorkspaceFrame";
 
-type Tab = "editor" | "agent" | "diff";
+type Tab = "editor" | "agent";
 
 export function ProjectView({ projectId }: { projectId: string }) {
   const [tab, setTab] = useState<Tab>("agent");
@@ -50,7 +49,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
       </header>
 
       <nav className="flex gap-1 border-b border-surface-border px-3 py-1.5">
-        {(["editor", "agent", "diff"] as Tab[]).map((name) => (
+        {(["editor", "agent"] as Tab[]).map((name) => (
           <button
             key={name}
             onClick={() => setTab(name)}
@@ -69,7 +68,6 @@ export function ProjectView({ projectId }: { projectId: string }) {
       <section className="min-h-0 flex-1">
         {tab === "editor" && <WorkspaceFrame project={data} />}
         {tab === "agent" && <AgentPanel project={data} />}
-        {tab === "diff" && <DiffPanel project={data} />}
       </section>
 
       <footer className="flex items-center gap-3 border-t border-surface-border px-4 py-1.5 text-[10px] text-neutral-600">
