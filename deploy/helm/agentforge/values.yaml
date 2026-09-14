@@ -282,7 +282,13 @@ config:
   workspaceProvider: kubernetes
   workspaceImage: ghcr.io/coder/code-server:latest
   # Agent runtime container that runs alongside code-server in the workspace.
+  # The stock OpenHands image cannot run its agent in-pod: the local runtime wants
+  # tmux and a browser, so deployments point this at the image built from
+  # deploy/images/openhands/.
   workspaceAgentImage: "ghcr.io/all-hands-ai/openhands:latest"
+  #: How the agent server runs its agent. `local` keeps it in the pod, which is
+  #: already the sandbox; `docker` needs a socket the pod does not have.
+  workspaceAgentRuntime: local
   # 0 means root. The OpenHands image declares User: root and its entrypoint
   # exits with "must run as root" for any other uid. Set a non-zero uid for a
   # rootless agent image.
