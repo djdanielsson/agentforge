@@ -178,6 +178,60 @@ def test_create_writes_the_config_where_t3_sessions_will_find_it(no_real_cluster
     assert "/projects/demo/.git/info/exclude" in writes
 
 
+def test_credentials_come_from_the_control_plane_namespace(no_real_cluster):  # noqa: ARG001
+    """A checkout has no namespace, so the Secret is read where it is stored.
+
+    The DevPod path copies a project's Secret into the workspace's namespace and
+    lets the pod resolve it. This provider must not try that — the reference is a
+    directory name, and there is no such namespace — so it reads the Secret from
+    the control plane's own namespace and writes it into the checkout.
+    """
+
+    from fleet_core.workspaces.base import SecretRef
+
+    settings = get_settings()
+    assert _provider().credentials_in_namespace is False
+    no_real_cluster.core.secrets[(settings.namespace, "demo-credentials")] = _secret(
+        "demo-credentials", settings.namespace, {"GITHUB_TOKEN": "not-a-real-token"}
+    )
+    try:
+        environment = FakeT3Environment()
+        provider = _provider(environment)
+        provider.create(
+            _spec(
+                secrets=[
+                    SecretRef(
+                        name="github",
+                        secret_name="demo-credentials",
+                        key="GITHUB_TOKEN",
+                        env_var="GITHUB_TOKEN",
+                    )
+                ]
+            )
+        )
+    finally:
+        no_real_cluster.core.secrets.pop((settings.namespace, "demo-credentials"), None)
+
+    written = [
+        payload for script, payload in environment.writes if "credentials.env" in script
+    ]
+    assert written, "no credentials file was written"
+    assert "GITHUB_TOKEN=not-a-real-token" in written[0]
+    # Written over stdin, never in a command line: argv is in the API server's log.
+    assert not any("not-a-real-token" in command for command in environment.commands)
+
+
+def _secret(name: str, namespace: str, values: dict[str, str]):
+    import base64
+
+    from kubernetes import client
+
+    return client.V1Secret(
+        metadata=client.V1ObjectMeta(name=name, namespace=namespace),
+        data={key: base64.b64encode(value.encode()).decode() for key, value in values.items()},
+    )
+
+
 def test_stop_says_there_is_nothing_to_stop(no_real_cluster):  # noqa: ARG001
     provider = _provider()
     with pytest.raises(ProviderError) as caught:

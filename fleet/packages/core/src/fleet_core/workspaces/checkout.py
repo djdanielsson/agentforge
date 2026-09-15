@@ -56,6 +56,11 @@ Runner = Callable[..., ExecResult]
 
 class CheckoutWorkspaceProvider(WorkspaceProvider):
     name = "checkout"
+    #: A checkout's workspace is a directory in a shared environment, so there is
+    #: no namespace to copy a project's Secret into. The credentials are read from
+    #: the control plane's own namespace and written into the checkout over the
+    #: exec stream instead.
+    credentials_in_namespace = False
 
     def __init__(self, settings: Settings | None = None, runner: Runner | None = None) -> None:
         self.settings = settings or get_settings()
@@ -389,7 +394,8 @@ elif [ -n {url} ]; then
   git -C {root} remote set-url origin {url} 2>/dev/null || true
 else
   git init -q {root}
-  git -C {root} -c user.email=fleet@localhost -c user.name=fleet commit -q --allow-empty -m 'fleet: empty checkout'
+  git -C {root} -c user.email=fleet@localhost -c user.name=fleet \
+    commit -q --allow-empty -m 'fleet: empty checkout'
   echo CLONE_EMPTY
 fi
 if id -u {agent_user} >/dev/null 2>&1; then
@@ -443,7 +449,10 @@ fi
         values: dict[str, str] = {}
         for secret_name in {ref.secret_name for ref in spec.secrets}:
             try:
-                items = secrets.secret_values(spec.reference, secret_name).items()
+                # The control plane's own namespace: the project's Secret is
+                # never copied anywhere with a checkout workspace, because there
+                # is no per-project namespace to copy it to.
+                items = secrets.secret_values(self.settings.namespace, secret_name).items()
             except Exception as exc:  # noqa: BLE001 - a missing secret is not fatal here
                 log.warning("cannot read %s for %s: %s", secret_name, spec.reference, exc)
                 continue

@@ -434,7 +434,12 @@ def provision_workspace(project_id: str, *, force: bool = False) -> dict[str, An
         )
         spec.definition_dir = str(definition)
         provider.prepare(spec)
-        _project_credentials_into_namespace(settings, project_id, reference)
+        # Copying the project's Secret into the workspace is a Kubernetes-provider
+        # idea: it needs a namespace to copy *into*. A checkout workspace has
+        # none, and asks the control plane's own namespace for the value when it
+        # writes the file (SPEC §16).
+        if provider.credentials_in_namespace:
+            _project_credentials_into_namespace(settings, project_id, reference)
         state = provider.create(spec)
         _store_state(workspace_id, state, provider.name, project_name, project_id, settings)
         return _workspace_by_id(workspace_id)

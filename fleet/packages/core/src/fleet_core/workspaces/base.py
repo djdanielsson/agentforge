@@ -113,6 +113,15 @@ class WorkspaceProvider(ABC):
 
     name: str = "unknown"
 
+    #: Whether this provider's workspaces resolve project credentials from a
+    #: Kubernetes Secret in a namespace of their own. DevPod and the native
+    #: provider do: the control plane copies the project's Secret into the
+    #: workspace's namespace and the pod reads it with `secretKeyRef`. A provider
+    #: whose workspaces share one environment has no such namespace, and reads
+    #: the credential from the control plane's own namespace when it writes it
+    #: into the workspace.
+    credentials_in_namespace: bool = True
+
     @abstractmethod
     def create(self, spec: WorkspaceSpec) -> WorkspaceState: ...
 
