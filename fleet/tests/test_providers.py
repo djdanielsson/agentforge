@@ -8,6 +8,7 @@ commands are well formed.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import pytest
 from fakes import FakeWorkspaceProvider, agent_spec, task_request
@@ -132,6 +133,63 @@ def test_json_event_stream_is_parsed():
     assert _last_assistant_text(raw) == "second and final"
     # Non-JSON output is passed through rather than dropped.
     assert _last_assistant_text("plain text") == "plain text"
+
+
+def test_devpod_injects_credentials_by_file_not_by_argv(tmp_path, monkeypatch):
+    """The credential reaches the pod, and the value never appears in `argv`.
+
+    `--workspace-env` would put the secret in the process's command line, which
+    any process on the machine can read. The env-file form keeps it out.
+    """
+    import fleet_core.secrets as fleet_secrets
+    from fleet_core.config import get_settings
+    from fleet_core.workspaces.base import SecretRef
+    from fleet_core.workspaces.devpod import DevPodKubernetesProvider
+
+    settings = get_settings(refresh=True)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(
+        fleet_secrets, "secret_values", lambda namespace, name: {"github": "a-secret-value"}
+    )
+
+    provider = DevPodKubernetesProvider(settings)
+    spec = WorkspaceSpec(
+        project_id="prj_1",
+        project_name="demo",
+        reference="fleet-demo",
+        secrets=[
+            SecretRef(
+                name="github",
+                secret_name="demo-credentials",
+                key="github",
+                env_var="GITHUB_TOKEN",
+            )
+        ],
+    )
+    args = provider._up_args(spec)
+
+    assert "--workspace-env-file" in args
+    assert "--workspace-env" not in args
+    assert "a-secret-value" not in " ".join(args)
+
+    written = args[args.index("--workspace-env-file") + 1]
+    assert Path(written).read_text().strip() == "GITHUB_TOKEN=a-secret-value"
+    # Only the owning process should be able to read it.
+    assert Path(written).stat().st_mode & 0o077 == 0
+    # And the namespace it is provisioned into is the project's own boundary.
+    assert "--provider-option" in args
+    assert "KUBERNETES_NAMESPACE=fleet-demo" in args
+
+
+def test_a_workspace_with_no_credentials_gets_no_env_file(tmp_path, monkeypatch):
+    from fleet_core.config import get_settings
+    from fleet_core.workspaces.devpod import DevPodKubernetesProvider
+
+    settings = get_settings(refresh=True)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    provider = DevPodKubernetesProvider(settings)
+    spec = WorkspaceSpec(project_id="prj_1", project_name="demo", reference="fleet-demo")
+    assert "--workspace-env-file" not in provider._up_args(spec)
 
 
 def test_providers_report_class_capabilities_without_raising():

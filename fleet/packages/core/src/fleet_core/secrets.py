@@ -69,6 +69,26 @@ def secret_present(namespace: str, name: str) -> bool:
         raise
 
 
+def secret_values(namespace: str, name: str) -> dict[str, str]:
+    """Decode a secret's values.
+
+    The only function in this package that returns values rather than key names,
+    and it exists for one caller: injecting a project's own credentials into
+    that project's own workspace. Nothing here is ever returned by the API.
+    """
+    cluster = kubernetes_common.get_cluster()
+    try:
+        found = cluster.core.read_namespaced_secret(name, namespace)
+    except ApiException as exc:
+        if exc.status == 404:
+            return {}
+        raise
+    return {
+        key: base64.b64decode(value).decode(errors="replace")
+        for key, value in (found.data or {}).items()
+    }
+
+
 def copy_secret(source_namespace: str, name: str, target_namespace: str, target_name: str) -> bool:
     """Copy a secret between namespaces.
 

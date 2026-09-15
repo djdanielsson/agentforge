@@ -32,6 +32,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from .. import secrets
 from ..config import Settings, get_settings
 from . import kubernetes_common
 from .base import ExecResult, ProviderError, WorkspaceProvider, WorkspaceSpec, WorkspaceState
@@ -125,6 +126,39 @@ class DevPodKubernetesProvider(WorkspaceProvider):
 
     # --- lifecycle --------------------------------------------------------
 
+    def _workspace_env_file(self, spec: WorkspaceSpec) -> Path | None:
+        """Write the workspace's credentials to a file for DevPod to inject.
+
+        `--workspace-env-file` rather than `--workspace-env`, because the latter
+        puts secret values in the process's argv, where any process on the
+        machine can read them.
+
+        Values come from the project's own Secret in its own namespace, so a
+        workspace can only ever receive credentials that belong to its project
+        (SPEC §15, §16).
+        """
+        if not spec.secrets:
+            return None
+        settings = self.settings
+        by_key = {ref.key: ref for ref in spec.secrets}
+        values: dict[str, str] = {}
+        for secret_name in {ref.secret_name for ref in spec.secrets}:
+            for key, value in secrets.secret_values(spec.reference, secret_name).items():
+                ref = by_key.get(key)
+                env_var = (ref.env_var if ref else "") or f"{key.upper()}_TOKEN"
+                # A multi-line value cannot be expressed in a KEY=VALUE env file.
+                if "\n" in value:
+                    log.warning("skipping credential %s: multi-line values cannot be injected", key)
+                    continue
+                values[env_var] = value
+        if not values:
+            return None
+        path = settings.data_dir / "logs" / f"{spec.reference}.env"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(f"{k}={v}\n" for k, v in values.items()))
+        path.chmod(0o600)
+        return path
+
     def _up_args(self, spec: WorkspaceSpec, *, force: bool = False) -> list[str]:
         args = [
             "up",
@@ -144,6 +178,9 @@ class DevPodKubernetesProvider(WorkspaceProvider):
             "--log-output",
             "plain",
         ]
+        env_file = self._workspace_env_file(spec)
+        if env_file is not None:
+            args += ["--workspace-env-file", str(env_file)]
         if force:
             args.append("--reset")
         return args

@@ -159,9 +159,12 @@ def test_the_isolation_boundary_is_built_before_the_credential_goes_in(
         json={"name": "demo-theta", "credentials": [{"name": "github", "value": "x"}]},
     )
     workspace = _wait_for(
-        lambda: client.get("/api/v1/projects/demo-theta").json()["workspaces"][0]
-        if client.get("/api/v1/projects/demo-theta").json()["workspaces"][0]["status"] == "ready"
-        else None
+        lambda: (
+            client.get("/api/v1/projects/demo-theta").json()["workspaces"][0]
+            if client.get("/api/v1/projects/demo-theta").json()["workspaces"][0]["status"]
+            == "ready"
+            else None
+        )
     )
     assert workspace["reference"] == "fleet-demo-theta"
     assert fake_provider.lifecycle[:2] == ["prepare:fleet-demo-theta", "create:fleet-demo-theta"]
@@ -177,9 +180,12 @@ def test_a_prepare_failure_is_reported_not_swallowed(client, fake_provider, clea
     monkeypatch.setattr(fake_provider, "prepare", explode)
     client.post("/api/v1/projects", json={"name": "demo-iota"})
     workspace = _wait_for(
-        lambda: client.get("/api/v1/projects/demo-iota").json()["workspaces"][0]
-        if client.get("/api/v1/projects/demo-iota").json()["workspaces"][0]["status"] == "failed"
-        else None
+        lambda: (
+            client.get("/api/v1/projects/demo-iota").json()["workspaces"][0]
+            if client.get("/api/v1/projects/demo-iota").json()["workspaces"][0]["status"]
+            == "failed"
+            else None
+        )
     )
     assert workspace["status"] == "failed"
     assert "cannot create the namespace" in workspace["error"]
