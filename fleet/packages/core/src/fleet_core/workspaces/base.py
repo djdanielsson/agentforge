@@ -102,6 +102,19 @@ class WorkspaceProvider(ABC):
     @abstractmethod
     def get_logs(self, reference: str, *, tail: int = 200) -> str: ...
 
+    def prepare(self, spec: WorkspaceSpec) -> None:
+        """Create the workspace's isolation boundary before filling it.
+
+        Called before `create`. Provisioning needs somewhere to put a project's
+        credentials *before* the pod exists — a container resolves
+        `secretKeyRef` at start, so a secret copied afterwards is a race, and a
+        secret copied before the namespace exists is a 404.
+
+        Providers that create their boundary inside `create` may leave this as a
+        no-op; it must be idempotent where it is implemented.
+        """
+        return None
+
     def start(self, reference: str) -> WorkspaceState:
         """Bring a stopped workspace back. Providers that cannot pause can raise."""
         raise ProviderError(f"{self.name} cannot start a stopped workspace")

@@ -60,10 +60,8 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
 
     # --- lifecycle --------------------------------------------------------
 
-    def create(self, spec: WorkspaceSpec) -> WorkspaceState:
-        from kubernetes import client
-
-        names = self._names(spec.reference)
+    def prepare(self, spec: WorkspaceSpec) -> None:
+        """The namespace and its identity, before a credential is put inside it."""
         self.cluster.ensure_namespace(
             spec.reference,
             {
@@ -72,7 +70,11 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
                 "pod-security.kubernetes.io/enforce": "baseline",
             },
         )
-        self._ensure_identity(spec, names)
+        self._ensure_identity(spec, self._names(spec.reference))
+
+    def create(self, spec: WorkspaceSpec) -> WorkspaceState:
+        names = self._names(spec.reference)
+        self.prepare(spec)
         self._ensure_pvc(spec, names)
         self._ensure_pod(spec, names)
         self._ensure_service(spec, names)
@@ -85,7 +87,6 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
                 T3_PORT,
                 {**self.settings.labels, "fleet.io/role": "t3"},
             )
-        del client
         return self.wait_ready(spec.reference, timeout=READY_TIMEOUT)
 
     def _ensure_identity(self, spec: WorkspaceSpec, names: dict[str, str]) -> None:

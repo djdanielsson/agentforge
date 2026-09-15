@@ -168,10 +168,19 @@ class DevPodKubernetesProvider(WorkspaceProvider):
         log.info("installing the devpod %s provider plugin", name)
         self._run(["provider", "add", name], timeout=600)
 
-    def create(self, spec: WorkspaceSpec) -> WorkspaceState:
+    def prepare(self, spec: WorkspaceSpec) -> None:
+        """Namespace, provider plugin and network policy, before anything enters.
+
+        The plugin has to be installed before the namespace is any use, and the
+        NetworkPolicy has to exist before the pod does — a policy applied
+        afterwards leaves a window where the workspace can reach everything.
+        """
         self._ensure_provider()
         self._ensure_namespace(spec)
         self._ensure_network_policy(spec)
+
+    def create(self, spec: WorkspaceSpec) -> WorkspaceState:
+        self.prepare(spec)
         self._spawn(
             self._up_args(spec),
             self.settings.data_dir / "logs" / f"{spec.reference}-devpod-up.log",

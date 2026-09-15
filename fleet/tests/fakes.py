@@ -26,6 +26,9 @@ class FakeWorkspaceProvider(WorkspaceProvider):
         self.workspaces: dict[str, WorkspaceState] = {}
         self.commands: list[tuple[str, list[str]]] = []
         self.destroyed: list[str] = []
+        #: Ordered trace of lifecycle calls, so a test can assert that the
+        #: isolation boundary is built before the pod that sits inside it.
+        self.lifecycle: list[str] = []
         #: Commands whose output the test wants to control, matched on a substring.
         #: The default answers mimic what a real workspace does for the two
         #: commands the opencode provider depends on.
@@ -37,7 +40,11 @@ class FakeWorkspaceProvider(WorkspaceProvider):
     def respond(self, needle: str, stdout: str, exit_code: int = 0) -> None:
         self.responses.insert(0, (needle, stdout, exit_code))
 
+    def prepare(self, spec: WorkspaceSpec) -> None:
+        self.lifecycle.append(f"prepare:{spec.reference}")
+
     def create(self, spec: WorkspaceSpec) -> WorkspaceState:
+        self.lifecycle.append(f"create:{spec.reference}")
         state = WorkspaceState(
             reference=spec.reference,
             provider=self.name,

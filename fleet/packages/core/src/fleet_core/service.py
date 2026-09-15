@@ -45,6 +45,19 @@ def slugify(value: str) -> str:
     return slug or "project"
 
 
+def _describe(exc: Exception) -> str:
+    """A short, useful error string.
+
+    A Kubernetes ApiException renders its whole HTTP response, headers included,
+    which buried the actual reason in the event log and the workspace row.
+    """
+    from kubernetes.client.exceptions import ApiException
+
+    if isinstance(exc, ApiException):
+        return f"{exc.status} {exc.reason}: {(exc.body or '')[:300]}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _reference(settings: Settings, slug: str) -> str:
     """The Kubernetes namespace for a project.
 
@@ -374,13 +387,17 @@ def provision_workspace(project_id: str, *, force: bool = False) -> dict[str, An
         # Project credentials live in the control-plane namespace and are copied
         # into the workspace's own namespace, so the pod resolves them with
         # secretKeyRef and nothing else in the platform holds the value.
-        _project_credentials_into_namespace(settings, project_id, reference)
-
+        #
+        # Order matters: the namespace has to exist first, and the secret has to
+        # be there before the pod starts. `prepare` creates the boundary,
+        # `create` starts the pod.
+        provider = get_workspace_provider(project.workspace_provider or None, settings)
         definition = render_definition(
             spec, settings, settings.data_dir / "projects" / slug / "workspace"
         )
         spec.definition_dir = str(definition)
-        provider = get_workspace_provider(project.workspace_provider or None, settings)
+        provider.prepare(spec)
+        _project_credentials_into_namespace(settings, project_id, reference)
         state = provider.create(spec)
         _store_state(workspace_id, state, provider.name, project_name, project_id, settings)
         return _workspace_by_id(workspace_id)
@@ -390,10 +407,10 @@ def provision_workspace(project_id: str, *, force: bool = False) -> dict[str, An
             workspace = session.get(Workspace, workspace_id)
             if workspace is not None:
                 workspace.status = "failed"
-                workspace.error = f"{type(exc).__name__}: {exc}"
+                workspace.error = _describe(exc)
         publish_sync(
             "workspace.failed",
-            message=f"{type(exc).__name__}: {exc}",
+            message=_describe(exc),
             project_id=project_id,
             payload={"reference": reference},
         )

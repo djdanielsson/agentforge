@@ -144,6 +144,47 @@ def test_cancelling_a_finished_task_is_rejected(client, fake_provider, clean_db)
     assert client.post(f"/api/v1/tasks/{task_id}/cancel").status_code == 409
 
 
+def test_the_isolation_boundary_is_built_before_the_credential_goes_in(
+    client, fake_provider, clean_db
+):
+    """Ordering that a live deployment got wrong.
+
+    The credential copy needs the namespace to exist, and the pod needs the
+    credential to exist, so `prepare` -> credentials -> `create` is the only
+    order that works. The first deployed control plane copied credentials first
+    and every project failed with a 404 from the Kubernetes API.
+    """
+    client.post(
+        "/api/v1/projects",
+        json={"name": "demo-theta", "credentials": [{"name": "github", "value": "x"}]},
+    )
+    workspace = _wait_for(
+        lambda: client.get("/api/v1/projects/demo-theta").json()["workspaces"][0]
+        if client.get("/api/v1/projects/demo-theta").json()["workspaces"][0]["status"] == "ready"
+        else None
+    )
+    assert workspace["reference"] == "fleet-demo-theta"
+    assert fake_provider.lifecycle[:2] == ["prepare:fleet-demo-theta", "create:fleet-demo-theta"]
+
+
+def test_a_prepare_failure_is_reported_not_swallowed(client, fake_provider, clean_db, monkeypatch):
+    """A provider that cannot build the boundary must not leave a project 'ready'."""
+    from fleet_core.workspaces.base import ProviderError
+
+    def explode(spec):
+        raise ProviderError("simulated: cannot create the namespace")
+
+    monkeypatch.setattr(fake_provider, "prepare", explode)
+    client.post("/api/v1/projects", json={"name": "demo-iota"})
+    workspace = _wait_for(
+        lambda: client.get("/api/v1/projects/demo-iota").json()["workspaces"][0]
+        if client.get("/api/v1/projects/demo-iota").json()["workspaces"][0]["status"] == "failed"
+        else None
+    )
+    assert workspace["status"] == "failed"
+    assert "cannot create the namespace" in workspace["error"]
+
+
 def test_a_t3_agent_cannot_be_given_a_task(client, fake_provider, clean_db):
     """T3 Code is a control surface. The API refuses rather than pretending."""
     client.post("/api/v1/projects", json={"name": "demo-zeta"})
