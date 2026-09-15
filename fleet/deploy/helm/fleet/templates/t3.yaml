@@ -49,6 +49,12 @@ spec:
         # start, so an edited env without a restart would be invisible.
         fleet.io/config-revision: "{{ .Values.workspace.t3Version }}-{{ .Values.llm.defaultModel }}"
     spec:
+      # The legacy service-link variables are off. Kubernetes injects
+      # `<SERVICENAME>_PORT=tcp://...` for every Service in the namespace, which
+      # fed `tcp://10.43.34.78:5733` to `t3 serve --port` from a variable named
+      # FLEET_T3_PORT — the injection is namespace-wide, so a rename is not a
+      # fix. Verified with a probe pod in this namespace.
+      enableServiceLinks: false
       # No cluster identity: this pod provisions nothing in the cluster, it just
       # runs T3 and the agent CLIs.
       automountServiceAccountToken: false

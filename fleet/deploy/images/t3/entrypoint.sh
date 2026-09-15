@@ -13,7 +13,12 @@ set -u
 
 PROJECTS="${FLEET_T3_PROJECTS_DIR:-/projects}"
 T3_HOME="${T3CODE_HOME:-/state/t3code}"
-PORT="${FLEET_T3_PORT:-5733}"
+# Literal, not an environment variable. Kubernetes injects
+# `<SERVICENAME>_PORT=tcp://<clusterIP>:<port>` into every pod in the namespace,
+# and this Service is `fleet-t3` with a port named `t3` — so a variable called
+# FLEET_T3_PORT arrives holding a URL, and `t3 serve --port` refuses it. The
+# pod also sets enableServiceLinks: false; this is the belt to that braces.
+PORT=5733
 AGENT_USER="${FLEET_WORKSPACE_AGENT_USER:-vscode}"
 
 mkdir -p "$PROJECTS" "$T3_HOME"

@@ -25,10 +25,20 @@ Project ──▶ Workspace ──▶ Agent ──▶ Task
 
 The control plane runs in the `fleet` namespace and is published on the tailnet:
 
-**<https://fleet-ts-ingress.tail7f3c08.ts.net>**
+**<https://fleet-cp-ingress.tail7f3c08.ts.net>**
 
-(Confirm the exact name with
-`kubectl -n fleet get ingress cp -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'`.)
+The shared T3 Code environment is published next to it:
+
+**<https://fleet-t3-ingress.tail7f3c08.ts.net>**
+
+(Confirm the exact names with
+`kubectl -n fleet get ingress -o custom-columns=NAME:.metadata.name,URL:.status.loadBalancer.ingress[0].hostname`.)
+
+The MagicDNS name is derived from the namespace and the Ingress name
+(`<namespace>-<ingress>-ingress.<tailnet>`), and it is also the TLS identity the
+operator asks Let's Encrypt for — five certificates per hostname per week. That
+is why `deploy.py` leaves an existing Ingress alone unless you pass
+`--refresh-ingress`.
 
 You need the API token — **unless the deployment is running without one.**
 
@@ -79,8 +89,57 @@ values, and the token is not stored in the vault.
    the message text instead, so it answers but does not edit files. A prompt
    like *"Reply with exactly the word: verified"* completes; the control plane,
    the proxy and the attribution are what is being demonstrated.
-6. **Open T3 Code.** Once the workspace is ready, the `open T3 →` link appears on
-   the project card, pointing at the project's own tailnet hostname.
+6. **Open T3 Code.** For a DevPod project, the `open T3 →` link on the project
+   card points at that project's own tailnet hostname. For a `checkout` project
+   there is no per-project T3 — every checkout project lives in the one shared
+   environment at <https://fleet-t3-ingress.tail7f3c08.ts.net>. See
+   [Two workspace modes](#two-workspace-modes).
+
+### Two workspace modes
+
+A project's `workspace.provider` picks what its workspace *is*. Both are always
+available; the provider is recorded on the project, so the two coexist in one
+deployment and the API stays provider-agnostic.
+
+| | `devpod` (default) | `checkout` |
+| --- | --- | --- |
+| what a workspace is | its own namespace, pod, PVC, Service and NetworkPolicy | a directory on the shared T3 environment's volume |
+| isolation | one namespace per project; default-deny ingress; egress limited to DNS, the control plane and the gateway | none of its own — every checkout project is a directory in one environment, and one environment is one pod |
+| T3 Code | one T3 server per project, on its own hostname | one T3 environment for every checkout project |
+| agent runs | `opencode run` in a git worktree, as `vscode` | the same, inside the environment |
+| use it when | isolation matters | one T3 UI over many projects matters |
+
+```bash
+# a checkout project: created in the shared T3 environment
+curl -sS -X POST $FLEET/api/v1/projects -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{
+    "name": "checkout-alpha",
+    "repository": {"url": "https://github.com/djdanielsson/agentforge", "branch": "fleet"},
+    "workspace": {"provider": "checkout"}
+  }' | jq '.workspaces[0] | {provider, reference, status}'
+
+# it becomes a directory on the environment's volume and a project in T3
+curl -sS -X POST $FLEET/api/v1/projects/checkout-alpha/workspace/exec \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"command": "ls -d /projects/checkout-alpha && t3 --version"}' | jq -r .stdout
+```
+
+### Fleet as an MCP server
+
+`POST /mcp` is the control plane as a **Model Context Protocol** server
+(Streamable HTTP), so an agent session in T3 can drive the fleet instead of only
+talking about it. The tools are `list_projects`, `create_project`, `list_agents`,
+`create_agent`, `submit_task`, `task_status`, `workspace_status` and
+`list_tasks` — and a checkout's `opencode.json` points at it, so a session
+opened on a checkout has them without any configuration.
+
+```bash
+# the handshake an MCP client makes, and the tool list it gets back
+curl -sS -X POST $FLEET/mcp -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}' | jq .result.serverInfo
+curl -sS -X POST $FLEET/mcp -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | jq -r '.result.tools[].name'
+```
 
 ### With curl
 
@@ -190,6 +249,7 @@ there is no private API.
 | POST | `/api/v1/tasks/{task}/cancel` | cancel |
 | GET | `/api/v1/events`, `/api/v1/events/stream` | event log, SSE stream |
 | POST | `/llm/v1/chat/completions` | the attributing LLM proxy (project token, not the operator token) |
+| POST | `/mcp` | the control plane as an **MCP server** (Streamable HTTP): `initialize`, `tools/list`, `tools/call` |
 
 Interactive docs at `/docs`.
 
@@ -203,15 +263,20 @@ fleet/
     runner.py                         task execution and its lifecycle
     events.py                         event bus: durable log + SSE fan-out
     llm.py                            gateway client, policy, usage, project tokens
+    mcp.py                            the fleet operations, as MCP tools
     secrets.py                        credentials by reference (values never leave Secrets)
-    workspaces/                       WorkspaceProvider: base, devpod, kubernetes, registry
+    workspaces/                       WorkspaceProvider: base, devpod, checkout,
+                                      kubernetes, registry
     agents/                           AgentProvider: base, opencode, t3code, shell, registry
   apps/control-plane/src/fleet_api/   FastAPI app, routers, single-page UI
+    routers/mcp.py                    the MCP transport (Streamable HTTP at /mcp)
   deploy/helm/fleet/                  the chart
-  deploy/images/workspace/            the native provider's workspace image
+  deploy/images/workspace/            the DevPod/native provider's workspace image
+  deploy/images/t3/                   the shared T3 Code environment's image
   deploy/build.py deploy/deploy.py    Kaniko build, render-and-apply deploy
-  tests/                              offline suite: API, providers, usage
+  tests/                              offline suite: API, providers, checkout, MCP, usage
   docs/FINDINGS.md                    what was validated, and what is assumed
+  docs/T3-INTEGRATION.md              why the fleet looks like this, and what was built
 ```
 
 ## Running it yourself
@@ -257,8 +322,14 @@ single place to change them. The ones worth knowing:
 | `FLEET_WORKSPACE_IMAGE` | `mcr.microsoft.com/devcontainers/base:ubuntu-24.04` | the devcontainer image |
 | `FLEET_LLM_GATEWAY_URL` | LiteLLM in `agentforge` | routing; the control plane never talks to a model vendor |
 | `FLEET_LLM_MODELS` | `local-coder,fast,smart` | logical aliases workspaces may request |
-| `FLEET_API_TOKEN` | generated | required for `/api/v1`; `/llm/v1` uses project tokens |
-| `FLEET_T3_ENABLED` | `true` | publish each workspace's T3 Code on the tailnet |
+| `FLEET_API_TOKEN` | generated | required for `/api/v1` and `/mcp`; `/llm/v1` uses project tokens |
+| `FLEET_T3_ENABLED` | `true` | publish each DevPod workspace's T3 Code on the tailnet |
+| `FLEET_WORKSPACE_PROVIDER` | `devpod` | the default provider per project: `devpod`, `checkout` or `kubernetes` |
+| `FLEET_T3_SERVICE` | `fleet-t3` | the shared T3 Code environment's Service, in this namespace |
+| `FLEET_T3_PROJECTS_DIR` | `/projects` | where the environment keeps its checkouts; the directory name is the workspace reference |
+| `FLEET_T3_HOME` | `/state/t3code` | the environment's `T3CODE_HOME`; `t3 project add` writes the project registry there |
+| `FLEET_T3_URL` | derived | the environment's tailnet URL, for a project card's T3 link |
+| `FLEET_MCP_URL` | derived | the MCP endpoint workspaces are pointed at |
 
 ## Security posture
 
