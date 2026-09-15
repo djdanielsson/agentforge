@@ -358,6 +358,24 @@ the clone is authenticated with the token in it. Live provisioning failed on
 `fatal: destination path '/projects/checkout-alpha' already exists and is not an
 empty directory`; the clone now goes to a scratch directory and is copied in.
 
+**A project whose git branch is called `fleet` cannot have `fleet/` task branches
+either.** The agent layer names a task's worktree branch `fleet/<agent>-<task>`,
+and git cannot hold `refs/heads/fleet` (the checkout's own branch) and
+`refs/heads/fleet/...` at once:
+
+```
+$ git worktree add -b fleet/backend-tsk_b809efc1194b .../worktrees/backend
+fatal: cannot lock ref 'refs/heads/fleet/backend-tsk_b809efc1194b':
+       'refs/heads/fleet' exists; cannot create 'refs/heads/fleet/...'
+```
+
+The provider's fallback then creates the worktree on a directory-named branch, so
+the task runs and commits — which is why the task rows from this environment
+record `git_branch: backend` rather than a `fleet/...` name, while the checkout
+itself is on `fleet`. It is not specific to checkout mode (a DevPod workspace
+cloned from a branch called `fleet` collides the same way), and the workaround is
+to give the project a branch that is not named after the prefix.
+
 ## And one decision worth keeping
 
 **An MCP endpoint is a path in someone else's config.** `/mcp` is served at the

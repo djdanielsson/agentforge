@@ -394,5 +394,8 @@ Found by running it, and not yet fixed:
   through the gateway, so an agent answers in text and cannot edit files; a task
   therefore proves the control plane, the proxy and the attribution rather than
   the agent's file editing
+- a project whose git branch is named `fleet` cannot have `fleet/...` task
+  branches as well (git refs are files *or* directories), so those task worktrees
+  land on a directory-named branch; recorded in `docs/T3-INTEGRATION.md`
 - the native Kubernetes provider has a workspace image that is built but has not
   been exercised end to end (FINDINGS §10)
