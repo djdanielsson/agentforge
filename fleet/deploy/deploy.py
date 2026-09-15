@@ -44,6 +44,13 @@ def api(path: str, method: str = "GET", body: dict | None = None) -> dict:
     return out
 
 
+#: Resources that hold state, or that other objects depend on, and so are never
+#: deleted by a redeploy. Deleting the PVC would throw away the control plane's
+#: database and DevPod's workspace metadata, and recreating it races the
+#: asynchronous deletion — an "already exists" error during a rollout.
+NEVER_DELETE = {"Namespace", "PersistentVolumeClaim"}
+
+
 def apply(body: dict) -> str:
     """Create or replace a resource, given a manifest with apiVersion/kind/metadata."""
     kind = body["kind"]
@@ -80,8 +87,10 @@ def apply(body: dict) -> str:
         item_path = f"{prefix}/{plural}/{name}"
         collection = f"{prefix}/{plural}"
 
-    existing = req(item_path)
-    if "__error__" not in existing:
+    exists = "__error__" not in req(item_path)
+    if exists and kind in NEVER_DELETE:
+        return f"kept {kind}/{name} (holds state; not recreated)"
+    if exists:
         # replace is not implemented for every kind through this shim, so
         # delete-and-create is used for the ones that change shape.
         api(item_path, method="DELETE")

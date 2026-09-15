@@ -128,8 +128,12 @@ echo WORKTREE_READY {shlex.quote(worktree)}
 
         env = self._env_prefix(spec, request.task_id)
         model = f"fleet/{spec.model}"
+        credentials = f"{home}/credentials.env"
         run = (
             f"cd {shlex.quote(worktree)} && "
+            # The project's credentials are state in the workspace volume, not
+            # in a command line (SPEC §16).
+            f"set -a; [ -f {shlex.quote(credentials)} ] && . {shlex.quote(credentials)}; set +a; "
             f"{env} "
             f"timeout {request.timeout} opencode run --model {shlex.quote(model)} "
             f"--format json --auto {shlex.quote(request.prompt)}"

@@ -96,8 +96,18 @@ class WorkspaceProvider(ABC):
 
     @abstractmethod
     def execute(
-        self, reference: str, command: list[str], *, container: str | None = None
-    ) -> ExecResult: ...
+        self,
+        reference: str,
+        command: list[str],
+        *,
+        container: str | None = None,
+        stdin_data: str | None = None,
+    ) -> ExecResult:
+        """Run a command inside the workspace.
+
+        `stdin_data` exists so a secret can be written to a file in the
+        workspace without passing through `argv`.
+        """
 
     @abstractmethod
     def get_logs(self, reference: str, *, tail: int = 200) -> str: ...

@@ -29,6 +29,8 @@ class FakeWorkspaceProvider(WorkspaceProvider):
         #: Ordered trace of lifecycle calls, so a test can assert that the
         #: isolation boundary is built before the pod that sits inside it.
         self.lifecycle: list[str] = []
+        #: (reference, command, stdin) for every write that carried a payload.
+        self.written: list[tuple[str, str, str]] = []
         #: Commands whose output the test wants to control, matched on a substring.
         #: The default answers mimic what a real workspace does for the two
         #: commands the opencode provider depends on.
@@ -81,7 +83,9 @@ class FakeWorkspaceProvider(WorkspaceProvider):
         self.destroyed.append(reference)
         self.workspaces.pop(reference, None)
 
-    def execute(self, reference, command, *, container=None) -> ExecResult:
+    def execute(self, reference, command, *, container=None, stdin_data=None) -> ExecResult:
+        if stdin_data is not None:
+            self.written.append((reference, " ".join(command), stdin_data))
         self.commands.append((reference, list(command)))
         script = " ".join(command)
         for needle, stdout, exit_code in self.responses:

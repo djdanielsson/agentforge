@@ -29,6 +29,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -43,6 +44,12 @@ log = logging.getLogger(__name__)
 CONTAINER = "devpod"
 T3_PORT = 4096
 READY_TIMEOUT = 900
+
+#: `devpod provider add` is not safe to run twice at once, and two projects
+#: provisioned concurrently will both try it on a fresh DEVPOD_HOME: the
+#: second exits non-zero and its whole workspace fails. One process holds
+#: one DEVPOD_HOME, so a module-level lock is the right scope.
+_PROVIDER_LOCK = threading.Lock()
 
 
 class DevPodKubernetesProvider(WorkspaceProvider):
@@ -126,38 +133,76 @@ class DevPodKubernetesProvider(WorkspaceProvider):
 
     # --- lifecycle --------------------------------------------------------
 
-    def _workspace_env_file(self, spec: WorkspaceSpec) -> Path | None:
-        """Write the workspace's credentials to a file for DevPod to inject.
+    def _credential_values(self, spec: WorkspaceSpec) -> dict[str, str]:
+        """Environment variable name -> value, for this project's credentials.
 
-        `--workspace-env-file` rather than `--workspace-env`, because the latter
-        puts secret values in the process's argv, where any process on the
-        machine can read them.
-
-        Values come from the project's own Secret in its own namespace, so a
-        workspace can only ever receive credentials that belong to its project
-        (SPEC §15, §16).
+        Read from the project's own Secret in its own namespace, so a workspace
+        can only ever receive credentials belonging to its project (SPEC §15,
+        §16). The values go no further than here: they are never logged, never
+        returned by the API, and never put in a process's argv.
         """
         if not spec.secrets:
-            return None
-        settings = self.settings
+            return {}
         by_key = {ref.key: ref for ref in spec.secrets}
         values: dict[str, str] = {}
         for secret_name in {ref.secret_name for ref in spec.secrets}:
             for key, value in secrets.secret_values(spec.reference, secret_name).items():
                 ref = by_key.get(key)
                 env_var = (ref.env_var if ref else "") or f"{key.upper()}_TOKEN"
-                # A multi-line value cannot be expressed in a KEY=VALUE env file.
                 if "\n" in value:
-                    log.warning("skipping credential %s: multi-line values cannot be injected", key)
+                    # A multi-line value cannot be an env file entry.
+                    log.warning("skipping credential %s: multi-line value", key)
                     continue
                 values[env_var] = value
+        return values
+
+    def _workspace_env_file(self, spec: WorkspaceSpec) -> Path | None:
+        """A file for DevPod's `--workspace-env-file`, which keeps values out of argv.
+
+        Observed in a live deployment: this flag is accepted and logged, but the
+        variables did not appear in the container's environment. The credential
+        still reaches the agent, through `_write_credential_env` below; this is
+        kept because it costs nothing and is the correct mechanism if DevPod
+        starts honouring it.
+        """
+        values = self._credential_values(spec)
         if not values:
             return None
-        path = settings.data_dir / "logs" / f"{spec.reference}.env"
+        path = self.settings.data_dir / "logs" / f"{spec.reference}.env"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(f"{k}={v}\n" for k, v in values.items()))
         path.chmod(0o600)
         return path
+
+    def _write_credential_env(self, spec: WorkspaceSpec) -> bool:
+        """Write the project's credentials into the workspace, over stdin.
+
+        This is the delivery path that works. DevPod's `--workspace-env-file` did
+        not surface the variables inside the container, and a Kubernetes exec
+        cannot set an environment for the process it starts, so the credentials
+        go into a 0600 file inside the workspace's own volume. The agent's run
+        command sources it, which is what puts the token in front of the agent
+        without it ever appearing in a command line.
+        """
+        values = self._credential_values(spec)
+        if not values:
+            return False
+        home = f"/workspaces/{spec.reference}/.fleet"
+        path = f"{home}/credentials.env"
+        # `umask` before the redirect, and the values on stdin rather than in the
+        # command: the exec API records the command it is given.
+        result = self.execute(
+            spec.reference,
+            ["bash", "-lc", f"umask 077; mkdir -p {home}; cat > {path}; chmod 600 {path}"],
+            stdin_data="".join(f"{k}={v}\n" for k, v in values.items()),
+        )
+        if not result.ok:
+            log.warning(
+                "writing credentials into %s failed: %s", spec.reference, result.stderr[:300]
+            )
+            return False
+        log.info("wrote %d credential(s) into %s", len(values), spec.reference)
+        return True
 
     def _up_args(self, spec: WorkspaceSpec, *, force: bool = False) -> list[str]:
         args = [
@@ -199,11 +244,13 @@ class DevPodKubernetesProvider(WorkspaceProvider):
         binary but no `kubernetes` plugin, so every project's provisioning
         failed before `devpod up` ever ran.
         """
-        listing = self._run(["provider", "list"], timeout=120, check=False)
-        if name in listing.stdout:
-            return
-        log.info("installing the devpod %s provider plugin", name)
-        self._run(["provider", "add", name], timeout=600)
+        with _PROVIDER_LOCK:
+            # Re-check inside the lock: another thread may have just done it.
+            listing = self._run(["provider", "list"], timeout=120, check=False)
+            if name in listing.stdout:
+                return
+            log.info("installing the devpod %s provider plugin", name)
+            self._run(["provider", "add", name], timeout=600)
 
     def prepare(self, spec: WorkspaceSpec) -> None:
         """Namespace, provider plugin and network policy, before anything enters.
@@ -222,7 +269,10 @@ class DevPodKubernetesProvider(WorkspaceProvider):
             self._up_args(spec),
             self.settings.data_dir / "logs" / f"{spec.reference}-devpod-up.log",
         )
-        return self.wait_ready(spec.reference, timeout=READY_TIMEOUT)
+        state = self.wait_ready(spec.reference, timeout=READY_TIMEOUT)
+        if state.ready:
+            self._write_credential_env(spec)
+        return state
 
     def start(self, reference: str) -> WorkspaceState:
         """DevPod cannot pause a pod, so a stopped workspace is re-`up`ed.
@@ -338,13 +388,24 @@ class DevPodKubernetesProvider(WorkspaceProvider):
     # --- execution --------------------------------------------------------
 
     def execute(
-        self, reference: str, command: list[str], *, container: str | None = None
+        self,
+        reference: str,
+        command: list[str],
+        *,
+        container: str | None = None,
+        stdin_data: str | None = None,
     ) -> ExecResult:
         pod = self.cluster.find_pod(reference, f"{DEVPOD_POD_LABEL}=true")
         if not pod:
             return ExecResult(" ".join(command), 127, stderr=f"no workspace pod in {reference}")
         try:
-            output = self.cluster.exec(reference, pod, command, container=container or CONTAINER)
+            output = self.cluster.exec(
+                reference,
+                pod,
+                command,
+                container=container or CONTAINER,
+                stdin_data=stdin_data,
+            )
         except Exception as exc:  # noqa: BLE001 - surfaced as a failed command
             return ExecResult(" ".join(command), 1, stderr=f"{type(exc).__name__}: {exc}")
         return ExecResult(" ".join(command), 0, stdout=output)

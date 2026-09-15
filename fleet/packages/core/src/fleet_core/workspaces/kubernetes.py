@@ -363,14 +363,23 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
         return state
 
     def execute(
-        self, reference: str, command: list[str], *, container: str | None = None
+        self,
+        reference: str,
+        command: list[str],
+        *,
+        container: str | None = None,
+        stdin_data: str | None = None,
     ) -> ExecResult:
         names = self._names(reference)
         if self.cluster.pod_phase(reference, names["pod"]) == "NotFound":
             return ExecResult(" ".join(command), 127, stderr="workspace pod is not running")
         try:
             output = self.cluster.exec(
-                reference, names["pod"], command, container=container or CONTAINER
+                reference,
+                names["pod"],
+                command,
+                container=container or CONTAINER,
+                stdin_data=stdin_data,
             )
         except Exception as exc:  # noqa: BLE001
             return ExecResult(" ".join(command), 1, stderr=f"{type(exc).__name__}: {exc}")

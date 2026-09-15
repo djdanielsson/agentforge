@@ -38,9 +38,16 @@ fi
 echo "running $(date -u +%FT%TZ)" > "$STATUS"
 
 log "installing prerequisites"
-if ! command -v xz >/dev/null 2>&1; then
-  (apt-get update -qq && apt-get install -y -qq --no-install-recommends xz-utils ca-certificates) \
-    >>"$FLEET_HOME/bootstrap.log" 2>&1 || log "apt install failed (continuing)"
+# python3/make/g++ are for node-gyp: T3 Code depends on node-pty, which builds a
+# native addon. Without them `npm install -g t3` fails and T3 never starts.
+MISSING=""
+for tool in xz python3 make g++; do
+  command -v "$tool" >/dev/null 2>&1 || MISSING="$MISSING $tool"
+done
+if [ -n "$MISSING" ]; then
+  (apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+      xz-utils ca-certificates python3 make g++) >>"$FLEET_HOME/bootstrap.log" 2>&1 \
+    || log "apt install failed (continuing)"
 fi
 
 ARCH="$(uname -m)"

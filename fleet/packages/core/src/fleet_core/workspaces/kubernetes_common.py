@@ -180,24 +180,58 @@ class Cluster:
             return f"<logs unavailable: {exc.status} {exc.reason}>"
 
     def exec(
-        self, namespace: str, pod: str, command: list[str], *, container: str | None = None
+        self,
+        namespace: str,
+        pod: str,
+        command: list[str],
+        *,
+        container: str | None = None,
+        stdin_data: str | None = None,
     ) -> str:
         """Run a command and return its combined output.
 
         Raising is left to the caller: `execute` wants the exit status, not an
         exception, because "the agent's command failed" is normal.
+
+        `stdin_data` is written after the stream opens, which is how a secret
+        reaches a file without ever appearing in `argv` — argv is visible in the
+        pod's process list and in the API server's audit log.
         """
-        return stream(
+        if stdin_data is None:
+            return stream(
+                self.core.connect_get_namespaced_pod_exec,
+                pod,
+                namespace,
+                command=command,
+                container=container,
+                stderr=True,
+                stdin=False,
+                stdout=True,
+                tty=False,
+            )
+
+        handle = stream(
             self.core.connect_get_namespaced_pod_exec,
             pod,
             namespace,
             command=command,
             container=container,
             stderr=True,
-            stdin=False,
+            stdin=True,
             stdout=True,
             tty=False,
+            _preload_content=False,
         )
+        handle.write_stdin(stdin_data)
+        chunks: list[str] = []
+        while handle.is_open():
+            handle.update(timeout=1)
+            if handle.peek_stdout():
+                chunks.append(handle.read_stdout())
+            if handle.peek_stderr():
+                chunks.append(handle.read_stderr())
+        handle.close()
+        return "".join(chunks)
 
     def apply_service(
         self,

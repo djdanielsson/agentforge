@@ -104,6 +104,8 @@ def test_opencode_provider_prepares_a_worktree_and_invokes_the_cli():
     # The agent is pointed at the fleet gateway's logical model, not a provider.
     assert "--model fleet/local-coder" in script
     assert "FLEET_LLM_TOKEN=" in script
+    # And it picks up the project's credentials from its own workspace volume.
+    assert "credentials.env" in script
 
 
 def test_opencode_provider_fails_loudly_without_a_repository():
@@ -190,6 +192,66 @@ def test_a_workspace_with_no_credentials_gets_no_env_file(tmp_path, monkeypatch)
     provider = DevPodKubernetesProvider(settings)
     spec = WorkspaceSpec(project_id="prj_1", project_name="demo", reference="fleet-demo")
     assert "--workspace-env-file" not in provider._up_args(spec)
+
+
+def test_credentials_are_written_into_the_workspace_over_stdin(tmp_path, monkeypatch):
+    """The only delivery path that works, and it keeps the value out of argv.
+
+    DevPod's `--workspace-env-file` is accepted but the variables did not appear
+    in a live container's environment, and a Kubernetes exec cannot set an
+    environment for the process it starts. So the credential is written into the
+    workspace's own volume over stdin, where the API server never records it.
+    """
+    import fleet_core.secrets as fleet_secrets
+    from fleet_core.config import get_settings
+    from fleet_core.workspaces.base import ExecResult, SecretRef
+    from fleet_core.workspaces.devpod import DevPodKubernetesProvider
+
+    settings = get_settings(refresh=True)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(
+        fleet_secrets, "secret_values", lambda namespace, name: {"github": "a-secret-value"}
+    )
+
+    provider = DevPodKubernetesProvider(settings)
+    captured: dict = {}
+
+    def fake_execute(reference, command, *, container=None, stdin_data=None):
+        captured["command"] = command
+        captured["stdin"] = stdin_data
+        return ExecResult(" ".join(command), 0, stdout="")
+
+    monkeypatch.setattr(provider, "execute", fake_execute)
+    spec = WorkspaceSpec(
+        project_id="prj_1",
+        project_name="demo",
+        reference="fleet-demo",
+        secrets=[
+            SecretRef(
+                name="github", secret_name="demo-credentials", key="github", env_var="GITHUB_TOKEN"
+            )
+        ],
+    )
+
+    assert provider._write_credential_env(spec) is True
+    script = " ".join(captured["command"])
+    assert "credentials.env" in script
+    assert "umask 077" in script
+    # The value travels on stdin, not in the command the API server records.
+    assert "a-secret-value" not in script
+    assert captured["stdin"] == "GITHUB_TOKEN=a-secret-value\n"
+
+
+def test_a_project_without_credentials_writes_nothing(tmp_path, monkeypatch):
+    from fleet_core.config import get_settings
+    from fleet_core.workspaces.devpod import DevPodKubernetesProvider
+
+    settings = get_settings(refresh=True)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    provider = DevPodKubernetesProvider(settings)
+    spec = WorkspaceSpec(project_id="prj_1", project_name="demo", reference="fleet-demo")
+    assert provider._write_credential_env(spec) is False
+    assert provider._credential_values(spec) == {}
 
 
 def test_providers_report_class_capabilities_without_raising():
