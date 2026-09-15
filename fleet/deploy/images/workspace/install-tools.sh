@@ -9,7 +9,10 @@ T3_VERSION="${FLEET_T3_VERSION:-0.0.40}"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends xz-utils ca-certificates curl git jq
+# python3/make/g++ are for node-gyp: T3 Code depends on node-pty, which builds a
+# native addon. Without them the npm install fails and the image build fails.
+apt-get install -y -qq --no-install-recommends \
+  xz-utils ca-certificates curl git jq python3 make g++
 rm -rf /var/lib/apt/lists/*
 
 case "$(uname -m)" in

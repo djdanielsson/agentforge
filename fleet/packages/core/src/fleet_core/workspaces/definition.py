@@ -48,7 +48,14 @@ def render_definition(spec: WorkspaceSpec, settings: Settings, root: Path) -> Pa
     devcontainer = {
         "name": f"fleet-{spec.project_name}",
         "image": spec.image or settings.workspace_image,
-        "remoteUser": "vscode",
+        # Root, deliberately. DevPod runs lifecycle hooks as `remoteUser`, and
+        # the vscode user cannot `apt-get` (no permission on
+        # /var/lib/apt/lists), which made the toolchain bootstrap fail. Running
+        # as root also keeps the files the bootstrap creates and the files the
+        # control plane execs against under the same owner, so git does not
+        # refuse the repository as "dubious ownership".
+        "remoteUser": "root",
+        "containerUser": "root",
         "containerEnv": environment,
         # The tools live on the workspace volume, so PATH has to be told about
         # them on every start, not just on the run that installed them. DevPod

@@ -37,6 +37,11 @@ fi
 
 echo "running $(date -u +%FT%TZ)" > "$STATUS"
 
+# The agent runs git against a repository the bootstrap created. When the two
+# run as different users git refuses with "detected dubious ownership", which
+# surfaced as a task failing with NOT_A_REPO.
+git config --global --add safe.directory '*' 2>/dev/null || true
+
 log "installing prerequisites"
 # python3/make/g++ are for node-gyp: T3 Code depends on node-pty, which builds a
 # native addon. Without them `npm install -g t3` fails and T3 never starts.

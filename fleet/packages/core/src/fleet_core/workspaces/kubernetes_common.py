@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ from kubernetes import config as kube_config
 from kubernetes.config.config_exception import ConfigException
 from kubernetes.stream import stream
 
+from .base import ProviderError
+
 log = logging.getLogger(__name__)
 
 SA_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
@@ -25,6 +28,9 @@ SA_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 # DevPod labels every pod it creates; this is how we find a workspace's pod
 # without depending on DevPod's internal naming scheme.
 DEVPOD_POD_LABEL = "devpod.sh/created"
+
+#: How long to wait for a deleted namespace to finish terminating.
+NAMESPACE_TERMINATE_TIMEOUT = 180
 
 
 def load_client() -> client.ApiClient:
@@ -117,16 +123,44 @@ class Cluster:
                 return False
             raise
 
+    def namespace_terminating(self, name: str) -> bool:
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            return self.core.read_namespace(name).metadata.deletion_timestamp is not None
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            raise
+
     def ensure_namespace(self, name: str, labels: dict[str, str]) -> None:
+        """Create the namespace, or wait for a terminating one to go.
+
+        Deleting a project and recreating it immediately is ordinary, and the
+        namespace from the first one is still terminating: anything created
+        inside it is refused with `403 ... is forbidden: unable to create new
+        content in namespace X because it is being terminated`.
+        """
         from kubernetes.client.exceptions import ApiException
 
         try:
             self.core.create_namespace(
                 client.V1Namespace(metadata=client.V1ObjectMeta(name=name, labels=labels))
             )
+            return
         except ApiException as exc:
             if exc.status != 409:
                 raise
+
+        deadline = time.monotonic() + NAMESPACE_TERMINATE_TIMEOUT
+        while time.monotonic() < deadline:
+            if not self.namespace_terminating(name):
+                return
+            time.sleep(2)
+        raise ProviderError(
+            f"namespace {name} is still terminating after "
+            f"{NAMESPACE_TERMINATE_TIMEOUT}s; delete the project or try again"
+        )
 
     def find_pod(self, namespace: str, label_selector: str) -> str:
         from kubernetes.client.exceptions import ApiException

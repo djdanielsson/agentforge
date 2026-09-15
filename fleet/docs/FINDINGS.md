@@ -323,3 +323,86 @@ not to reinvent only where an existing tool *does*:
 5. **A second workspace provider (native Kubernetes)** exists behind the same
    interface, to show the boundary is real and to have a fallback when the DevPod
    binary is absent.
+
+---
+
+## 9. What the deployed control plane taught us
+
+Everything in §1–§8 was learned from a throwaway `devpod up` and a shell. These
+were learned only by running the real thing, which is the argument for
+deploying early rather than after the code is "finished".
+
+### 9.1 DevPod's provider plugin is not part of the CLI — confirmed
+
+`devpod provider list` is empty on a fresh `DEVPOD_HOME`, and every command then
+fails with `couldn't find default provider kubernetes`. The plugin is not in the
+CLI and not in our image either, because it lives *under* `DEVPOD_HOME`, which is
+a persistent volume. The provider now installs it on demand.
+
+### 9.2 `devpod provider add` is not concurrency-safe — confirmed
+
+Two projects provisioned at the same time both ran `provider add` against the
+same fresh `DEVPOD_HOME`. One succeeded, the other exited non-zero, and the
+second project's whole workspace failed with `ProviderError: devpod provider add
+failed with exit 1` — while the first succeeded, which made it look flaky rather
+than racy. Serialised with a lock now.
+
+### 9.3 `--workspace-env-file` does not reach the container — confirmed
+
+DevPod accepted and logged the flag:
+
+```
+--workspace-env-file /data/logs/fleet-verify-alpha.env
+```
+
+and the file contained the credential, but the workspace's `containerEnv` had
+only the variables from `devcontainer.json`. `env` and `/proc/1/environ` inside
+the pod both lacked the injected name.
+
+**What the control plane does instead:** it writes the project's credentials into
+the workspace's own volume as a `0600` `.fleet/credentials.env`, over the exec
+stream's **stdin** — so the value never appears in `argv`, which the API server
+audits and the pod's process list exposes — and the agent's run command sources
+that file. The env-file flag is kept because it is the right mechanism if DevPod
+starts honouring it, and costs nothing.
+
+### 9.4 Provisioning order is load-bearing — confirmed
+
+The first deployed control plane copied a project's credential into the project
+namespace *before* asking the provider to create it. The namespace did not exist
+yet, so every project failed with a Kubernetes `404`. This is why
+`WorkspaceProvider.prepare(spec)` exists: the isolation boundary is built first,
+then filled.
+
+### 9.5 T3 Code needs a compiler in the workspace — confirmed
+
+`npm install -g t3` failed with:
+
+```
+npm error gyp ERR! stack Error: Could not find any Python installation to use
+npm error gyp ERR! cwd .../node_modules/t3/node_modules/node-pty
+```
+
+T3 Code depends on `node-pty`, which builds a native addon with `node-gyp`. The
+`mcr.microsoft.com/devcontainers/base:ubuntu-24.04` image has no Python and no
+compiler, so the workspace bootstrap now installs `python3`, `make` and `g++`.
+The same omission broke the native provider's workspace image build.
+
+### 9.6 `devpod up` bootstraps twice — confirmed
+
+DevPod runs both `onCreateCommand` and `postCreateCommand`, so the bootstrap runs
+twice on first provision. It is idempotent (a marker file under the workspace
+volume) and the second run takes about a second, so this was left alone rather
+than worked around.
+
+### 9.7 DevPod's own pod is root with a service-account token — confirmed
+
+Inside the workspace: `uid=0(root)`, and
+`/var/run/secrets/kubernetes.io/serviceaccount/token` is a live, projected token
+for the namespace's `default` ServiceAccount, whose namespace is the project's
+own (`fleet-verify-alpha`). It is a per-namespace identity, not a cluster one,
+and the control plane's NetworkPolicy limits what it can reach — but it is not
+least privilege, and the native provider does better
+(`automountServiceAccountToken: false`, a Role that can only read ConfigMaps).
+Recorded as a limitation of using DevPod rather than a defect in this code.
+

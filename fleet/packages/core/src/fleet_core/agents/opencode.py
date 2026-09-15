@@ -105,6 +105,7 @@ class OpenCodeProvider(AgentProvider):
         # one project cannot corrupt each other's tree.
         prepare = f"""
 set -u
+git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 cd {shlex.quote(home + "/repo")} 2>/dev/null || {{ echo NO_REPO; exit 3; }}
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {{ echo NOT_A_REPO; exit 3; }}
 mkdir -p {shlex.quote(home + "/worktrees")}
