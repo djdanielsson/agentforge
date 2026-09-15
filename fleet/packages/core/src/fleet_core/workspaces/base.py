@@ -80,14 +80,23 @@ class WorkspaceLayout:
     """Where a provider puts a project's files, and where its tools live.
 
     Providers disagree about this and nothing else. A DevPod workspace mounts
-    its volume at `/workspaces/<id>` and installs its toolchain into the volume;
-    a checkout workspace is a directory in a shared T3 environment whose tools
-    are in the image. The agent layer must not hard-code either, or a second
-    provider is a rewrite rather than an addition.
+    its volume at `/workspaces/<id>`, keeps its checkout under `.fleet/repo` and
+    installs its toolchain into the volume; a checkout workspace *is* the
+    repository, with its tools in the image. The agent layer must not hard-code
+    either, or a second provider is a rewrite rather than an addition.
     """
 
     root: str
     bin_dir: str
+    #: The project's git checkout, when it is not `<fleet_home>/repo`. A checkout
+    #: workspace is the repository itself, so this is its root.
+    repo: str = ""
+    #: Where agent worktrees live. Not always under `fleet_home`: a checkout
+    #: workspace's fleet home is *inside* its own repository, and another agent's
+    #: worktree nested in the checkout shows up in the checkout's own
+    #: `git status` — and `git add -A` there stages it as an embedded
+    #: repository, which is one agent's commit recording another agent's tree.
+    worktrees: str = ""
 
     @property
     def fleet_home(self) -> str:
@@ -100,7 +109,15 @@ class WorkspaceLayout:
 
     @property
     def repo_path(self) -> str:
-        return f"{self.fleet_home}/repo"
+        return self.repo or f"{self.fleet_home}/repo"
+
+    @property
+    def worktrees_dir(self) -> str:
+        return self.worktrees or f"{self.fleet_home}/worktrees"
+
+    @property
+    def tasks_dir(self) -> str:
+        return f"{self.fleet_home}/tasks"
 
 
 class WorkspaceProvider(ABC):

@@ -115,9 +115,15 @@ def test_the_layout_is_the_project_directory_not_a_mounted_volume(no_real_cluste
     layout = _provider().layout("demo")
     assert layout.root == "/projects/demo"
     assert layout.fleet_home == "/projects/demo/.fleet"
-    assert layout.repo_path == "/projects/demo/.fleet/repo"
+    # The checkout *is* the repository.
+    assert layout.repo_path == "/projects/demo"
     # The tools are in the image; there is no per-workspace toolchain.
     assert layout.bin_dir == "/usr/local/bin"
+    # Worktrees are outside the checkout: nested inside it they would show in
+    # the checkout's own `git status`, and `git add -A` there stages another
+    # agent's worktree as an embedded repository.
+    assert layout.worktrees_dir == "/projects/.fleet/demo/worktrees"
+    assert not layout.worktrees_dir.startswith(layout.repo_path + "/")
 
 
 def test_create_clones_the_checkout_and_registers_it_with_t3(no_real_cluster):  # noqa: ARG001
@@ -302,7 +308,7 @@ def test_the_agent_layer_follows_the_provider_layout(no_real_cluster):  # noqa: 
         model="local-coder",
     )
     assert agent._fleet_home(spec) == "/projects/demo/.fleet"
-    assert agent._worktree_path(spec, "tsk_1") == "/projects/demo/.fleet/worktrees/backend-tsk_1"
+    assert agent._worktree_path(spec, "tsk_1") == "/projects/.fleet/demo/worktrees/backend-tsk_1"
     provider.create(_spec())
     assert agent.start(spec) == "idle"
     # The start probe looks for the tools where this provider says they are,

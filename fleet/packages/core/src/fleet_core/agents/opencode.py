@@ -41,18 +41,24 @@ class OpenCodeProvider(AgentProvider):
 
         Asked of the workspace provider, not assumed: a DevPod workspace mounts
         a volume at `/workspaces/<id>` and installs its tools into it, while a
-        checkout workspace is a directory in a shared environment whose tools
-        are in the image. Hard-coding either made the second provider a rewrite.
+        checkout workspace *is* the repository, with its tools in the image and
+        its worktrees outside itself. Hard-coding either made the second provider
+        a rewrite rather than an addition.
         """
         return self.workspaces.layout(spec.workspace_reference)
 
     def _fleet_home(self, spec: AgentSpec) -> str:
         return self._layout(spec).fleet_home
 
+    def _repo_path(self, spec: AgentSpec) -> str:
+        return self._layout(spec).repo_path
+
+    def _worktrees_dir(self, spec: AgentSpec) -> str:
+        return self._layout(spec).worktrees_dir
+
     def _worktree_path(self, spec: AgentSpec, task_id: str) -> str:
-        home = self._fleet_home(spec)
         slug = spec.worktree or f"{spec.name}-{task_id}"
-        return f"{home}/worktrees/{slug}"
+        return f"{self._worktrees_dir(spec)}/{slug}"
 
     def _shell(self, spec: AgentSpec, script: str):
         return self.workspaces.execute(spec.workspace_reference, ["bash", "-lc", script])
@@ -171,6 +177,9 @@ class OpenCodeProvider(AgentProvider):
         worktree = self._worktree_path(spec, request.task_id)
         branch = request.branch or f"fleet/{spec.name}-{request.task_id}"
         home = self._fleet_home(spec)
+        repo = self._repo_path(spec)
+        worktrees_dir = self._worktrees_dir(spec)
+        tasks_dir = self._layout(spec).tasks_dir
 
         # SPEC §25: each agent works in its own Git worktree so two agents on
         # one project cannot corrupt each other's tree.
@@ -182,9 +191,9 @@ class OpenCodeProvider(AgentProvider):
 set -u
 {self._agent_identity()}
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
-cd {shlex.quote(home + "/repo")} 2>/dev/null || {{ echo NO_REPO; exit 3; }}
+cd {shlex.quote(repo)} 2>/dev/null || {{ echo NO_REPO; exit 3; }}
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {{ echo NOT_A_REPO; exit 3; }}
-mkdir -p {shlex.quote(home + "/worktrees")} {shlex.quote(home + "/tasks")}
+mkdir -p {shlex.quote(worktrees_dir)} {shlex.quote(tasks_dir)}
 if [ -d {shlex.quote(worktree)} ]; then
   echo WORKTREE_EXISTS
 else
@@ -193,8 +202,8 @@ else
 fi
 # Everything the agent touches must belong to the agent's user, including
 # state a previous root-owned run left behind.
-chown -R "$FLEET_AGENT_UID:$FLEET_AGENT_GID" {shlex.quote(home + "/repo")} \
-  {shlex.quote(home + "/worktrees")} {shlex.quote(home + "/tasks")} 2>/dev/null || true
+chown -R "$FLEET_AGENT_UID:$FLEET_AGENT_GID" {shlex.quote(repo)} \
+  {shlex.quote(worktrees_dir)} {shlex.quote(tasks_dir)} 2>/dev/null || true
 chown "$FLEET_AGENT_UID:$FLEET_AGENT_GID" {shlex.quote(home + "/credentials.env")} \
   2>/dev/null || true
 echo WORKTREE_READY {shlex.quote(worktree)}
@@ -223,7 +232,7 @@ echo WORKTREE_READY {shlex.quote(worktree)}
             # The project's credentials are state in the workspace volume, not
             # in a command line (SPEC §16).
             f"set -a; [ -f {shlex.quote(credentials)} ] && . {shlex.quote(credentials)}; set +a; "
-            f"mkdir -p {shlex.quote(home + '/tasks')}; "
+            f"mkdir -p {shlex.quote(tasks_dir)}; "
             f"{env} "
             f"timeout {request.timeout} opencode run --model {shlex.quote(model)} "
             f"--format json --auto {shlex.quote(request.prompt)} "

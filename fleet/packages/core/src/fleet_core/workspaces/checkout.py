@@ -110,11 +110,21 @@ class CheckoutWorkspaceProvider(WorkspaceProvider):
     def layout(self, reference: str) -> WorkspaceLayout:
         """A checkout workspace *is* the project directory.
 
-        Tools are in the image at `/usr/local/bin` (node, t3, opencode), not in
-        the workspace, because the workspace is a git checkout and nothing else.
+        Tools are in the image at `/usr/local/bin` (node, t3, opencode), because
+        the workspace is a git checkout and nothing else. The repo path is the
+        root — the checkout *is* the repository — and the worktrees live outside
+        it, under `/projects/.fleet/`: they are fleet's scratch space, not the
+        project's. Nested inside the checkout they appear in its `git status`,
+        and `git add -A` there stages another agent's worktree as an embedded
+        repository (verified against git 2.47).
         """
         root = f"{self.settings.t3_projects_dir.rstrip('/')}/{reference}"
-        return WorkspaceLayout(root=root, bin_dir="/usr/local/bin")
+        return WorkspaceLayout(
+            root=root,
+            bin_dir="/usr/local/bin",
+            repo=root,
+            worktrees=f"{self.settings.t3_projects_dir.rstrip('/')}/.fleet/{reference}/worktrees",
+        )
 
     def prepare(self, spec: WorkspaceSpec) -> None:
         """Wait for the shared environment. Nothing is created here.
@@ -385,8 +395,11 @@ elif [ -n {url} ]; then
   repo_url={url}
   [ -f {credentials} ] && . {credentials}
   if [ -n "${{GITHUB_TOKEN:-}}" ]; then
-    repo_url=$(printf '%s' "$repo_url" | \\
-      sed -E 's#^https://#https://x-access-token:${{GITHUB_TOKEN}}@#')
+    # Not `sed`: the substitution would have to be quoted so the shell still
+    # expands the token, and one misplaced quote silently ships a literal
+    # `${{GITHUB_TOKEN}}` and a failed login. Parameter expansion has no such
+    # failure mode.
+    repo_url="https://x-access-token:${{GITHUB_TOKEN}}@${{repo_url#https://}}"
   fi
   scratch=$(mktemp -d)
   if clone_out=$(git clone --branch {branch} "$repo_url" "$scratch/repo" 2>&1); then
