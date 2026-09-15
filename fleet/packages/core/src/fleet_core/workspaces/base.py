@@ -75,6 +75,34 @@ class ExecResult:
         return self.exit_code == 0
 
 
+@dataclass
+class WorkspaceLayout:
+    """Where a provider puts a project's files, and where its tools live.
+
+    Providers disagree about this and nothing else. A DevPod workspace mounts
+    its volume at `/workspaces/<id>` and installs its toolchain into the volume;
+    a checkout workspace is a directory in a shared T3 environment whose tools
+    are in the image. The agent layer must not hard-code either, or a second
+    provider is a rewrite rather than an addition.
+    """
+
+    root: str
+    bin_dir: str
+
+    @property
+    def fleet_home(self) -> str:
+        """The provider-neutral bit of a workspace: fleet's own files in it."""
+        return f"{self.root}/.fleet"
+
+    @property
+    def config_path(self) -> str:
+        return f"{self.fleet_home}/opencode.json"
+
+    @property
+    def repo_path(self) -> str:
+        return f"{self.fleet_home}/repo"
+
+
 class WorkspaceProvider(ABC):
     """Capability-based and deliberately small (SPEC §46).
 
@@ -139,6 +167,16 @@ class WorkspaceProvider(ABC):
     def connect(self, reference: str) -> str:
         """A URL a human or another program can open. Empty when unsupported."""
         return ""
+
+    def layout(self, reference: str) -> WorkspaceLayout:
+        """Where this provider keeps a workspace's files.
+
+        The default is the DevPod/devcontainer shape, which is also what the
+        native Kubernetes provider uses. A provider that puts projects somewhere
+        else overrides this and nothing above the interface changes.
+        """
+        root = f"/workspaces/{reference}"
+        return WorkspaceLayout(root=root, bin_dir=f"{root}/.fleet/tools/bin")
 
     def capabilities(self) -> dict[str, Any]:
         return {

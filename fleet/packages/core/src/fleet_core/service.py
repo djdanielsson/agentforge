@@ -58,14 +58,18 @@ def _describe(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _reference(settings: Settings, slug: str) -> str:
-    """The Kubernetes namespace for a project.
+def _reference(settings: Settings, slug: str, provider: str = "") -> str:
+    """The provider's handle for a project's workspace.
 
-    This is the isolation boundary (SPEC §18), so it is derived from the project
-    name and is stable for the project's lifetime.
+    For the Kubernetes providers this is the namespace (the isolation boundary,
+    SPEC §18), so it is derived from the project name and is stable for the
+    project's lifetime. For a checkout workspace it is the directory name on the
+    shared volume — the same slug, with no namespace prefix, because there is no
+    namespace to name.
     """
-    reference = f"{settings.namespace_prefix}{slug}"
-    return reference[:63].rstrip("-")
+    if provider == "checkout":
+        return slug[:63].rstrip("-")
+    return f"{settings.namespace_prefix}{slug}"[:63].rstrip("-")
 
 
 # --- reads -------------------------------------------------------------------
@@ -124,13 +128,18 @@ def create_project(payload: dict[str, Any], *, provision: bool = True) -> dict[s
 
         workspace_cfg = payload.get("workspace") or {}
         repository = payload.get("repository") or {}
+        # The provider is chosen per project: a checkout project lands in the
+        # shared T3 environment, a devpod project gets its own namespace. The
+        # reference has to follow the provider, so it is resolved from the same
+        # value rather than from the deployment default.
+        provider_name = workspace_cfg.get("provider") or settings.workspace_provider
         project = Project(
             name=name,
             description=payload.get("description", ""),
             repository_url=repository.get("url", ""),
             repository_provider=repository.get("provider", "github"),
             repository_branch=repository.get("branch", "main"),
-            workspace_provider=workspace_cfg.get("provider", settings.workspace_provider),
+            workspace_provider=provider_name,
             cpu=workspace_cfg.get("cpu", settings.workspace_cpu),
             memory=workspace_cfg.get("memory", settings.workspace_memory),
             storage=workspace_cfg.get("storage", settings.workspace_storage),
@@ -144,7 +153,7 @@ def create_project(payload: dict[str, Any], *, provision: bool = True) -> dict[s
             project_id=project.id,
             name=payload.get("workspaceName", "default"),
             provider=project.workspace_provider,
-            reference=_reference(settings, slug),
+            reference=_reference(settings, slug, provider_name),
             status="pending",
         )
         session.add(workspace)
@@ -284,10 +293,17 @@ def delete_project(name_or_id: str) -> None:
     """
     with session_scope() as session:
         project = get_project(session, name_or_id)
-        reference = (
-            session.execute(select(Workspace.reference).where(Workspace.project_id == project.id))
+        workspace = (
+            session.execute(select(Workspace).where(Workspace.project_id == project.id))
             .scalars()
             .first()
+        )
+        reference = workspace.reference if workspace else ""
+        # The *project's* provider, not the deployment's default: with two
+        # providers in play, tearing a checkout down through the DevPod provider
+        # (or the other way round) would target the wrong thing entirely.
+        provider_name = (
+            workspace.provider if workspace and workspace.provider else project.workspace_provider
         )
         project_id, project_name = project.id, project.name
         for model in (Task, Agent, Workspace, Credential):
@@ -300,14 +316,14 @@ def delete_project(name_or_id: str) -> None:
     if reference:
         threading.Thread(
             target=_destroy_workspace,
-            args=(reference, project_id),
+            args=(reference, project_id, provider_name),
             daemon=True,
             name=f"destroy-{reference}",
         ).start()
 
 
-def _destroy_workspace(reference: str, project_id: str) -> None:
-    provider = get_workspace_provider(None, get_settings())
+def _destroy_workspace(reference: str, project_id: str, provider_name: str = "") -> None:
+    provider = get_workspace_provider(provider_name or None, get_settings())
     try:
         provider.destroy(reference)
         publish_sync(

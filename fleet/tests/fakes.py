@@ -161,6 +161,27 @@ class FakeCluster:
         self.networking = None
         self.rbac = None
         self.namespaces: set[str] = set()
+        #: One pod per namespace, for the providers that look one up by label.
+        #: The default is non-empty because most tests care about what happens
+        #: *after* a pod exists; a test that wants "no environment" empties it.
+        self.pods: dict[str, str] = {}
+        self.pod_is_ready = True
+        self.exec_log: list[list[str]] = []
+
+    def find_pod(self, namespace: str, label_selector: str) -> str:  # noqa: ARG002
+        return self.pods.get(namespace, "fleet-t3-0")
+
+    def pod_ready(self, namespace: str, pod: str) -> bool:  # noqa: ARG002
+        return self.pod_is_ready
+
+    def pod_logs(self, namespace: str, pod: str, **kwargs) -> str:  # noqa: ARG002
+        return "fake environment logs\n"
+
+    def exec(self, namespace, pod, command, **kwargs):  # noqa: ARG002
+        from fleet_core.workspaces.kubernetes_common import ExecOutcome
+
+        self.exec_log.append(list(command))
+        return ExecOutcome(command=" ".join(command), output="", exit_code=0)
 
     def namespace_exists(self, name: str) -> bool:
         return name in self.namespaces

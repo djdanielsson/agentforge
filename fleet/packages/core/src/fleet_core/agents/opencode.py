@@ -36,8 +36,18 @@ class OpenCodeProvider(AgentProvider):
 
     # --- helpers ----------------------------------------------------------
 
+    def _layout(self, spec: AgentSpec):
+        """Where this agent's workspace keeps its files.
+
+        Asked of the workspace provider, not assumed: a DevPod workspace mounts
+        a volume at `/workspaces/<id>` and installs its tools into it, while a
+        checkout workspace is a directory in a shared environment whose tools
+        are in the image. Hard-coding either made the second provider a rewrite.
+        """
+        return self.workspaces.layout(spec.workspace_reference)
+
     def _fleet_home(self, spec: AgentSpec) -> str:
-        return f"/workspaces/{spec.workspace_reference}/.fleet"
+        return self._layout(spec).fleet_home
 
     def _worktree_path(self, spec: AgentSpec, task_id: str) -> str:
         home = self._fleet_home(spec)
@@ -104,7 +114,8 @@ class OpenCodeProvider(AgentProvider):
         home = self._fleet_home(spec)
         variables = {
             "PATH": (
-                f"{home}/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                f"{self._layout(spec).bin_dir}:"
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             ),
             "OPENCODE_CONFIG": f"{home}/opencode.json",
             **gateway_token_env(spec.project_id),
@@ -112,6 +123,11 @@ class OpenCodeProvider(AgentProvider):
             "FLEET_TASK_ID": task_id,
             "FLEET_TASK_MODEL": spec.model,
         }
+        # The config file references `{env:FLEET_API_TOKEN}` rather than holding
+        # a token, so the value has to be in the run's environment. It is not
+        # set when the deployment runs with no operator token.
+        if self.settings.api_token:
+            variables["FLEET_API_TOKEN"] = self.settings.api_token
         # HOME is deliberately not set here: the run is wrapped by `_as_agent`,
         # which sets it to the *agent user's* home. Leaving it as `/root` gave an
         # unprivileged opencode a home it could not write to.
@@ -125,13 +141,14 @@ class OpenCodeProvider(AgentProvider):
         OpenCode has no daemon to start; what `start` means here is "the
         workspace has the tools and the gateway config it needs".
         """
+        bin_dir = self._layout(spec).bin_dir
         script = (
             "set -u; "
-            f"test -x {self._fleet_home(spec)}/tools/bin/opencode "
+            f"test -x {bin_dir}/opencode "
             "&& echo TOOLS_OK || echo TOOLS_MISSING; "
             f"test -f {self._fleet_home(spec)}/opencode.json "
             "&& echo CONFIG_OK || echo CONFIG_MISSING; "
-            f"test -x {self._fleet_home(spec)}/tools/bin/node "
+            f"test -x {bin_dir}/node "
             "&& echo NODE_OK || echo NODE_MISSING"
         )
         result = self._shell(spec, script)

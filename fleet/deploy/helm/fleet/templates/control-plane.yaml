@@ -85,6 +85,23 @@ spec:
               value: {{ .Values.workspace.t3Enabled | quote }}
             - name: FLEET_TAILNET_DOMAIN
               value: {{ .Values.tailnetDomain | quote }}
+            - name: FLEET_MCP_URL
+              value: {{ include "fleet.mcpUrl" . | quote }}
+            # Where the shared T3 environment is (docs/T3-INTEGRATION.md §A), for
+            # the checkout workspace provider. Derived from the release name so
+            # the app config and the manifests cannot drift apart.
+            - name: FLEET_T3_NAMESPACE
+              value: {{ .Values.namespace | quote }}
+            - name: FLEET_T3_SERVICE
+              value: {{ printf "%s-t3" .Release.Name | quote }}
+            - name: FLEET_T3_POD_SELECTOR
+              value: {{ printf "app.kubernetes.io/name=%s-t3" .Release.Name | quote }}
+            - name: FLEET_T3_PROJECTS_DIR
+              value: {{ .Values.t3.projectsPath | quote }}
+            - name: FLEET_T3_HOME
+              value: {{ .Values.t3.home | quote }}
+            - name: FLEET_T3_URL
+              value: {{ include "fleet.t3Url" . | quote }}
             - name: FLEET_LLM_GATEWAY_URL
               value: {{ .Values.llm.gatewayUrl | quote }}
             - name: FLEET_LLM_DEFAULT_MODEL

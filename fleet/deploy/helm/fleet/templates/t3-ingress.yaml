@@ -1,0 +1,24 @@
+{{- if and .Values.t3.enabled .Values.t3.ingress.enabled }}
+# The T3 Code environment on the tailnet, for pairing a client to it.
+#
+# The operator derives the MagicDNS name from the namespace and this object's
+# name — <namespace>-<name>-ingress.<tailnet> — and that name is the identity it
+# requests a Let's Encrypt certificate for (five per hostname per week). One
+# ingress, created once, named deliberately: `t3` gives
+# fleet-t3-ingress.<tailnet>, distinct from the control plane's `cp`.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.t3.ingressName }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: t3
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: {{ .Release.Name }}-t3
+      port:
+        number: {{ .Values.t3.port }}
+{{- end }}

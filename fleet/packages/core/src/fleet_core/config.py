@@ -72,12 +72,30 @@ class Settings:
     # integration surface
     control_plane_url: str = ""
     tailnet_domain: str = DEFAULT_TAILNET
+    #: The MCP endpoint the control plane serves and the fleet environments
+    #: point their agent CLIs at. Derived from `control_plane_url` when unset.
+    mcp_url: str = ""
 
     # agent tooling installed inside a workspace
     node_version: str = "v24.21.0"
     opencode_version: str = "1.18.31"
     t3_version: str = "0.0.40"
     t3_enabled: bool = True
+
+    # the shared T3 Code environment (the checkout workspace provider's world)
+    t3_namespace: str = "fleet"
+    t3_pod_selector: str = "app.kubernetes.io/name=fleet-t3"
+    t3_container: str = "t3"
+    t3_service: str = "fleet-t3"
+    #: Where the environment mounts its projects volume. Projects are
+    #: directories directly under it, and the directory name *is* the
+    #: workspace reference.
+    t3_projects_dir: str = "/projects"
+    #: The environment's T3 Code data directory (T3CODE_HOME). `t3 project add`
+    #: writes the project registry here, so the CLI and the server must agree.
+    t3_home: str = "/state/t3code"
+    #: The tailnet URL of the environment, for the UI link on a project card.
+    t3_url: str = ""
 
     labels: dict[str, str] = field(
         default_factory=lambda: {"app.kubernetes.io/managed-by": "fleet-control-plane"}
@@ -86,6 +104,16 @@ class Settings:
     @property
     def devpod_enabled(self) -> bool:
         return _bool("FLEET_DEVPOD_ENABLED", True)
+
+    @property
+    def mcp_endpoint(self) -> str:
+        """The MCP URL agents are told to call, derived when not configured."""
+        if self.mcp_url:
+            return self.mcp_url
+        base = self.control_plane_url or (
+            f"http://{self.namespace}-api.{self.namespace}.svc.cluster.local:8000"
+        )
+        return f"{base.rstrip('/')}/mcp"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -125,10 +153,22 @@ class Settings:
             llm_request_timeout=_int("FLEET_LLM_REQUEST_TIMEOUT", 180),
             control_plane_url=os.environ.get("FLEET_CONTROL_PLANE_URL", ""),
             tailnet_domain=os.environ.get("FLEET_TAILNET_DOMAIN", DEFAULT_TAILNET),
+            mcp_url=os.environ.get("FLEET_MCP_URL", ""),
             node_version=os.environ.get("FLEET_NODE_VERSION", "v24.21.0"),
             opencode_version=os.environ.get("FLEET_OPENCODE_VERSION", "1.18.31"),
             t3_version=os.environ.get("FLEET_T3_VERSION", "0.0.40"),
             t3_enabled=_bool("FLEET_T3_ENABLED", True),
+            t3_namespace=os.environ.get(
+                "FLEET_T3_NAMESPACE", os.environ.get("FLEET_NAMESPACE", "fleet")
+            ),
+            t3_pod_selector=os.environ.get(
+                "FLEET_T3_POD_SELECTOR", "app.kubernetes.io/name=fleet-t3"
+            ),
+            t3_container=os.environ.get("FLEET_T3_CONTAINER", "t3"),
+            t3_service=os.environ.get("FLEET_T3_SERVICE", "fleet-t3"),
+            t3_projects_dir=os.environ.get("FLEET_T3_PROJECTS_DIR", "/projects"),
+            t3_home=os.environ.get("FLEET_T3_HOME", "/state/t3code"),
+            t3_url=os.environ.get("FLEET_T3_URL", ""),
         )
 
 

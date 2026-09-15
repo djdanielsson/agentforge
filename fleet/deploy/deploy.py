@@ -191,7 +191,9 @@ def ensure_api_secret(token: str | None) -> None:
         carried = None
         if "__error__" not in existing:
             carried = (existing.get("data") or {}).get("token-secret")
-        data["token-secret"] = carried or base64.b64encode(pysecrets.token_hex(32).encode()).decode()
+        data["token-secret"] = carried or base64.b64encode(
+            pysecrets.token_hex(32).encode()
+        ).decode()
 
     body = {
         "apiVersion": "v1",

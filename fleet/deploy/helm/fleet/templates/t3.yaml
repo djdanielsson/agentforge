@@ -1,0 +1,153 @@
+{{- if .Values.t3.enabled }}
+# The shared T3 Code environment (docs/T3-INTEGRATION.md §A).
+#
+# One environment owns every project: projects are *checkouts* — directories
+# under the projects volume — not namespaces. That is the whole trade: one T3 UI
+# over many projects, and no per-project isolation for the projects that live
+# here. Projects on the DevPod provider keep their namespaces; the two modes
+# coexist, chosen per project.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-t3-projects
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: t3
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: {{ .Values.t3.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.t3.projectsStorage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-t3
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: t3
+spec:
+  replicas: 1
+  # T3 Code's own state (its project registry) is SQLite on this volume, so a
+  # second replica would be a second environment fighting over one file.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}-t3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}-t3
+        app.kubernetes.io/component: t3
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        # A changed value here restarts the pod. T3 reads its configuration at
+        # start, so an edited env without a restart would be invisible.
+        fleet.io/config-revision: "{{ .Values.workspace.t3Version }}-{{ .Values.llm.defaultModel }}"
+    spec:
+      # No cluster identity: this pod provisions nothing in the cluster, it just
+      # runs T3 and the agent CLIs.
+      automountServiceAccountToken: false
+      securityContext:
+        # Root, deliberately: the projects volume is mounted here and the
+        # checkouts in it have to be created and handed to the user the agent
+        # runs as.
+        fsGroup: 1000
+      containers:
+        - name: t3
+          image: "{{ .Values.t3.image.repository }}:{{ default .Values.image.tag .Values.t3.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: {{ .Values.t3.projectsPath }}
+          ports:
+            - name: t3
+              containerPort: {{ .Values.t3.port }}
+          env:
+            - name: T3CODE_HOME
+              value: {{ .Values.t3.home | quote }}
+            - name: HOME
+              value: /root
+            # The agent CLIs in this image (opencode) reach the fleet control
+            # plane by service name: the gateway proxy for models, and /mcp for
+            # the fleet tools.
+            - name: FLEET_CONTROL_PLANE_URL
+              value: {{ include "fleet.apiUrl" . | quote }}
+            - name: FLEET_MCP_URL
+              value: {{ include "fleet.mcpUrl" . | quote }}
+            - name: FLEET_LLM_BASE_URL
+              value: {{ printf "%s/llm/v1" (include "fleet.apiUrl" .) | quote }}
+            - name: FLEET_LLM_MODEL
+              value: {{ .Values.llm.defaultModel | quote }}
+            - name: FLEET_LLM_MODELS
+              value: {{ join "," .Values.llm.models | quote }}
+            - name: FLEET_LLM_GATEWAY_URL
+              value: {{ .Values.llm.gatewayUrl | quote }}
+            # Both the operator token and the gateway master key are read from
+            # the cluster's own Secrets, so no value passes through values.yaml,
+            # a shell or a log.
+            - name: FLEET_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-api
+                  key: api-token
+                  optional: true
+            - name: FLEET_LLM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-api
+                  key: token-secret
+                  optional: true
+            - name: FLEET_LLM_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.secretName }}
+                  key: LITELLM_MASTER_KEY
+          resources:
+            {{- toYaml .Values.t3.resources | nindent 12 }}
+          readinessProbe:
+            # T3 answers on / as soon as it is listening; the SPA is the app.
+            httpGet:
+              path: /
+              port: t3
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /
+              port: t3
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: projects
+              mountPath: {{ .Values.t3.projectsPath }}
+            # T3's data directory is on the same volume: it holds the project
+            # registry the control plane writes to with `t3 project add`.
+            - name: projects
+              mountPath: /state
+      volumes:
+        - name: projects
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-t3-projects
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-t3
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: t3
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Release.Name }}-t3
+  ports:
+    - name: t3
+      port: {{ .Values.t3.port }}
+      targetPort: {{ .Values.t3.port }}
+{{- end }}

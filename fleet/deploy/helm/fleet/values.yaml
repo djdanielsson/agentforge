@@ -52,6 +52,43 @@ workspace:
 # proxy and for injected tokens.
 controlPlaneUrl: ""
 
+# The MCP server the control plane serves at /mcp, and that the T3 environment's
+# agent CLIs are pointed at (docs/T3-INTEGRATION.md §A). Empty derives it from
+# controlPlaneUrl.
+mcp:
+  url: ""
+
+# The shared T3 Code environment: one environment, projects as checkouts on its
+# own volume, exposed on the tailnet. `workspaceMode` projects are created
+# against this; DevPod projects are unaffected.
+t3:
+  enabled: true
+  image:
+    repository: registry.registry.svc:5000/fleet-t3
+    # Empty means "the same tag as the control plane image".
+    tag: ""
+  port: 5733
+  # The ingress name, hence the MagicDNS name: <namespace>-<name>-ingress.<tailnet>.
+  # It is the TLS identity, so it is not cosmetic — see the control plane's own
+  # ingress below for what churning one costs.
+  ingressName: t3
+  ingress:
+    enabled: true
+  # Empty derives https://<namespace>-<ingressName>-ingress.<tailnet>.
+  url: ""
+  projectsPath: /projects
+  # T3 Code's data directory (T3CODE_HOME), on the same volume.
+  home: /state/t3code
+  projectsStorage: 20Gi
+  storageClass: local-path
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+
 tailnetDomain: tail7f3c08.ts.net
 
 persistence:

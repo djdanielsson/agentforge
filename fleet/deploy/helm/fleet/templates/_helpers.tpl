@@ -9,3 +9,15 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- define "fleet.fullname" -}}
 {{ .Release.Name }}-api
 {{- end -}}
+
+{{- define "fleet.apiUrl" -}}
+{{- default (printf "http://%s.%s.svc.cluster.local:8000" (include "fleet.fullname" .) .Values.namespace) .Values.controlPlaneUrl -}}
+{{- end -}}
+
+{{- define "fleet.mcpUrl" -}}
+{{- default (printf "%s/mcp" (include "fleet.apiUrl" .)) .Values.mcp.url -}}
+{{- end -}}
+
+{{- define "fleet.t3Url" -}}
+{{- default (printf "https://%s-%s-ingress.%s" .Values.namespace .Values.t3.ingressName .Values.tailnetDomain) .Values.t3.url -}}
+{{- end -}}

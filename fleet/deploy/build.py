@@ -30,6 +30,8 @@ TAG = sys.argv[2] if len(sys.argv) > 2 else "dev"
 IMAGES = [
     ("fleet-api", "apps/control-plane/Dockerfile"),
     ("fleet-workspace", "deploy/images/workspace/Dockerfile"),
+    # The shared T3 Code environment (docs/T3-INTEGRATION.md §A).
+    ("fleet-t3", "deploy/images/t3/Dockerfile"),
 ]
 
 

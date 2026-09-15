@@ -10,6 +10,7 @@ import logging
 
 from ..config import Settings, get_settings
 from .base import ProviderError, WorkspaceProvider
+from .checkout import CheckoutWorkspaceProvider
 from .devpod import DevPodKubernetesProvider
 from .kubernetes import KubernetesWorkspaceProvider
 
@@ -18,6 +19,9 @@ log = logging.getLogger(__name__)
 WORKSPACE_PROVIDERS: dict[str, type[WorkspaceProvider]] = {
     "devpod": DevPodKubernetesProvider,
     "kubernetes": KubernetesWorkspaceProvider,
+    # One T3 environment, projects as checkouts on a shared volume
+    # (docs/T3-INTEGRATION.md §A). Chosen per project.
+    "checkout": CheckoutWorkspaceProvider,
 }
 
 

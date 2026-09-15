@@ -19,7 +19,7 @@ from fleet_core.db import init_db
 from fleet_core.events import bus
 from fleet_core.workspaces.base import ProviderError
 
-from .routers import agents, events, llm, projects, system
+from .routers import agents, events, llm, mcp, projects, system
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,7 +62,16 @@ async def provider_error_handler(request: Request, exc: ProviderError) -> JSONRe
     )
 
 
-for router in (system.router, projects.router, agents.router, events.router, llm.router):
+for router in (
+    system.router,
+    projects.router,
+    agents.router,
+    events.router,
+    llm.router,
+    # MCP is mounted at `/mcp`, not under `/api/v1`: the path is part of the
+    # client's configuration, and an MCP endpoint that moves breaks agents.
+    mcp.router,
+):
     app.include_router(router)
 
 
