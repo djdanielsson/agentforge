@@ -390,3 +390,21 @@ to give the project a branch that is not named after the prefix.
 root, not under `/api/v1`, because the URL is written into every checkout's
 opencode config. Moving it later breaks agents that were written yesterday.
 
+## What a redeploy does to a checkout's status
+
+Worth knowing before it looks like a bug: `fleet-t3` runs the whole environment, so
+redeploying it replaces the pod. A provisioning run that checks the pod *while* it
+is being replaced records `provisioning` and stores it, and nothing re-checks
+afterwards — the project then reads `provisioning` indefinitely although the
+checkout and the registration are both fine. `POST
+/api/v1/projects/{p}/workspace/refresh` re-runs the check and it goes `ready`.
+The underlying gap is that a stored status is only re-derived on demand, so any
+event that replaces the environment pod (a redeploy, a node drain) can leave a
+stale one behind.
+
+Also measured while fixing this, in case it bites again: `t3 project add` exits
+**non-zero** with `ProjectAlreadyExistsError` when the root is already a project,
+so a re-provision reported a healthy checkout as failed until that was treated as
+success. And `workspace.creating` used to name the deployment's default provider
+rather than the project's, so a checkout project logged "via devpod".
+
