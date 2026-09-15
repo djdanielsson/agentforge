@@ -186,10 +186,15 @@ class CheckoutWorkspaceProvider(WorkspaceProvider):
         if "CLONE_FAILED" in output:
             failure = _marker(output, "CLONE_ERROR") or "git clone failed"
         elif "T3_REGISTER_FAILED" in output:
-            failure = "t3 project add did not register the checkout"
+            failure = _marker(output, "T3_REGISTER_ERROR") or (
+                "t3 project add did not register the checkout"
+            )
         if failure:
             state.status = "failed"
             state.error = failure
+            # The environment is up, but this checkout is not usable — a failed
+            # project must not also report itself ready.
+            state.ready = False
         elif not state.ready:
             state.status = "provisioning"
         return state
@@ -448,9 +453,12 @@ fi
     def _register_script(self, slug: str) -> str:
         """Make the directory a project in T3, and prove it took.
 
-        `t3 project add` is idempotent in effect for our purposes: it prints the
-        existing project when the workspace root is already registered, and the
-        new project's id when it is not. Both are success.
+        Measured against v0.0.40, and *not* what the command implies: `t3 project
+        add` exits **non-zero** when the workspace root is already a project
+        (`ProjectAlreadyExistsError`). A re-provision therefore looked like a
+        failure and marked a healthy checkout failed — the desired-state rebuild
+        has to converge instead. Any other non-zero exit is a real failure and
+        keeps the command's own last line as its message.
         """
         root = f"{self.settings.t3_projects_dir.rstrip('/')}/{slug}"
         return "; ".join(
@@ -459,9 +467,13 @@ fi
                 "export PATH=/usr/local/bin:$PATH",
                 f"out=$(t3 project add {shlex.quote(root)} "
                 f"--base-dir {shlex.quote(self.settings.t3_home)} 2>&1)",
-                'status=$?',
-                'if [ "$status" = "0" ]; then echo "$out"; '
-                "echo T3_REGISTERED; else echo \"$out\"; echo T3_REGISTER_FAILED; fi"
+                "status=$?",
+                'if [ "$status" = "0" ]; then echo "$out"; echo T3_REGISTERED; '
+                'elif echo "$out" | grep -q "ProjectAlreadyExistsError"; then '
+                'echo "$out"; echo T3_REGISTERED; '
+                'else echo "$out"; '
+                'echo "T3_REGISTER_ERROR=$(echo \\"$out\\" | tail -1)"; '
+                "echo T3_REGISTER_FAILED; fi",
             ]
         )
 

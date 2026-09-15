@@ -33,6 +33,7 @@ class FakeT3Environment:
         self.checkouts: set[str] = set()
         self.registered: set[str] = set()
         self.clone_fails = False
+        self.register_errors = False
 
     def _slug(self, command: str) -> str:
         match = re.search(r"/projects/([a-z0-9][a-z0-9-]*)", command)
@@ -71,7 +72,9 @@ class FakeT3Environment:
                 output += "CLONE_OK\n"
         if "t3 project add" in script:
             # A real `t3 project add` needs the directory to exist.
-            if slug in self.checkouts:
+            if self.register_errors:
+                output += "Error: something went wrong\nT3_REGISTER_ERROR=Error: something went wrong\nT3_REGISTER_FAILED\n"
+            elif slug in self.checkouts:
                 self.registered.add(slug)
                 output += f"Added project 54e5a6be (demo) at /projects/{slug}.\nT3_REGISTERED\n"
             else:
@@ -316,3 +319,31 @@ def test_the_agent_layer_follows_the_provider_layout(no_real_cluster):  # noqa: 
     commands = provider._runner.commands  # noqa: SLF001 - the fake is the assertion
     assert any("test -x /usr/local/bin/opencode" in command for command in commands)
     assert not any("/tools/bin/opencode" in command for command in commands)
+
+
+def test_re_registering_an_existing_checkout_is_not_a_failure(no_real_cluster):  # noqa: ARG001
+    """Measured against v0.0.40: `t3 project add` exits **non-zero** when the root
+    is already a project (`ProjectAlreadyExistsError`).
+
+    The desired-state re-provision has to converge on that, not call it failed —
+    which is what happened the first time a checkout was re-applied.
+    """
+    script = _provider()._register_script("demo")
+
+    assert "ProjectAlreadyExistsError" in script
+    # and the already-exists branch is the success branch
+    branch = script.split("elif echo", 1)[1].split("else echo", 1)[0]
+    assert "T3_REGISTERED" in branch
+    assert "T3_REGISTER_FAILED" not in branch
+
+
+def test_a_register_failure_keeps_the_commands_own_message(no_real_cluster):  # noqa: ARG001
+    """`t3 project add did not register the checkout` sent a reader to the wrong
+    place; the command's own last line says what happened."""
+    environment = FakeT3Environment()
+    environment.register_errors = True
+    state = _provider(environment).create(_spec())
+
+    assert not state.ready
+    assert state.status == "failed"
+    assert "something went wrong" in state.error

@@ -412,10 +412,13 @@ def provision_workspace(project_id: str, *, force: bool = False) -> dict[str, An
         workspace_id = workspace.id
         reference = workspace.reference
         project_name = project.name
+        # The project's own provider, not the deployment default: a checkout
+        # project logged "via devpod", which is wrong and misleading.
+        provider_name = project.workspace_provider or settings.workspace_provider
 
     publish_sync(
         "workspace.creating",
-        message=f"provisioning workspace {reference} via {settings.workspace_provider}",
+        message=f"provisioning workspace {reference} via {provider_name}",
         project_id=project_id,
         payload={"reference": reference},
     )
