@@ -13,8 +13,11 @@
 FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 
 USER root
-COPY install-tools.sh /usr/local/bin/fleet-install-tools
-COPY entrypoint.sh /usr/local/bin/fleet-workspace-entrypoint
+# COPY paths are relative to the *build context*, not to this Dockerfile. The
+# context is the fleet/ directory (its uv workspace root), so the paths below
+# start at deploy/images/workspace/ even though this file lives there.
+COPY deploy/images/workspace/install-tools.sh /usr/local/bin/fleet-install-tools
+COPY deploy/images/workspace/entrypoint.sh /usr/local/bin/fleet-workspace-entrypoint
 RUN chmod +x /usr/local/bin/fleet-install-tools /usr/local/bin/fleet-workspace-entrypoint \
  && FLEET_TOOLS=/usr/local /usr/local/bin/fleet-install-tools \
  && rm -f /usr/local/bin/fleet-install-tools

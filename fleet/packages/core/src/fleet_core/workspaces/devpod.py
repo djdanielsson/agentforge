@@ -148,7 +148,28 @@ class DevPodKubernetesProvider(WorkspaceProvider):
             args.append("--reset")
         return args
 
+    def _ensure_provider(self, name: str = "kubernetes") -> None:
+        """Install the DevPod provider plugin if this DEVPOD_HOME lacks it.
+
+        The plugin is not part of the CLI: `devpod provider list` is empty on a
+        fresh DEVPOD_HOME and every command then fails with "couldn't find
+        default provider kubernetes". It is also not in our image, because the
+        plugin lives under DEVPOD_HOME, which is a persistent volume. Doing it
+        here means a fresh volume works without a build-time dependency on the
+        provider registry.
+
+        Found the hard way: the first deployed control plane had the DevPod
+        binary but no `kubernetes` plugin, so every project's provisioning
+        failed before `devpod up` ever ran.
+        """
+        listing = self._run(["provider", "list"], timeout=120, check=False)
+        if name in listing.stdout:
+            return
+        log.info("installing the devpod %s provider plugin", name)
+        self._run(["provider", "add", name], timeout=600)
+
     def create(self, spec: WorkspaceSpec) -> WorkspaceState:
+        self._ensure_provider()
         self._ensure_namespace(spec)
         self._ensure_network_policy(spec)
         self._spawn(
@@ -163,6 +184,7 @@ class DevPodKubernetesProvider(WorkspaceProvider):
         The PVC survives `devpod stop`, so `.fleet/` and the agent's repository
         come back with the pod.
         """
+        self._ensure_provider()
         definition = self.settings.data_dir / "projects" / reference / "workspace"
         if not definition.exists():
             raise ProviderError(

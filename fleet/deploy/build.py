@@ -118,6 +118,31 @@ def job(name: str, image: str, dockerfile: str) -> dict:
     }
 
 
+def pod_logs(namespace: str, pod: str, container: str, tail: int = 60) -> str:
+    """Fetch plain-text pod logs.
+
+    `kubehelp.req` parses JSON, and the log endpoint returns text, so a failure
+    inside a build showed up as a JSONDecodeError rather than the build error.
+    """
+    import ssl
+    import urllib.request
+
+    sa = "/var/run/secrets/kubernetes.io/serviceaccount"
+    with open(f"{sa}/token") as handle:
+        token = handle.read().strip()
+    context = ssl.create_default_context(cafile=f"{sa}/ca.crt")
+    request = urllib.request.Request(
+        f"https://kubernetes.default.svc/api/v1/namespaces/{namespace}/pods/{pod}/log"
+        f"?container={container}&tailLines={tail}"
+    )
+    request.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(request, context=context) as response:
+            return response.read().decode(errors="replace")
+    except urllib.error.HTTPError as error:
+        return f"<{error.code}> {error.read().decode(errors='replace')[:800]}"
+
+
 def wait_job(name: str, timeout: int = 1500) -> str:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -158,13 +183,13 @@ def main() -> int:
         print(f"  {name}: {outcome}")
         if outcome != "succeeded":
             failed.append(name)
-            pod_logs = req(f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=job-name%3D{name}")
-            for pod in pod_logs.get("items", []):
-                log = req(
-                    f"/api/v1/namespaces/{NAMESPACE}/pods/{pod['metadata']['name']}"
-                    "/log?tailLines=60"
-                )
-                print("    log:", log.get("body", log) if isinstance(log, dict) else log)
+            pods = req(f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=job-name%3D{name}")
+            for pod in pods.get("items", []):
+                for container in ("build", "clone"):
+                    print(
+                        f"    [{container}] "
+                        + pod_logs(NAMESPACE, pod["metadata"]["name"], container, tail=40)
+                    )
     return 1 if failed else 0
 
 
