@@ -1,6 +1,7 @@
 // Thin typed wrapper over the control-plane REST API.
 
 import type {
+  ActivityItem,
   Agent,
   Event,
   FileContent,
@@ -71,6 +72,15 @@ export const api = {
     request<{ agent_id: string; messages: { role: string; content: string }[] }>(
       `/agents/${agentId}/conversation`,
     ),
+  // The agent's actions between turns, read from the agent server: our own
+  // tables only hold what was said.
+  activity: (agentId: string, after = 0) =>
+    request<{
+      session: string | null;
+      status: string;
+      activity: ActivityItem[];
+      unavailable?: string;
+    }>(`/agents/${agentId}/activity?after=${after}`),
   decidePermission: (agentId: string, requestId: string, decision: string) =>
     request<Agent>(`/agents/${agentId}/permissions`, {
       method: "POST",

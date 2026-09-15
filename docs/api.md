@@ -524,3 +524,29 @@ agentforge watch demo
 `DELETE /api/v1/projects/{id}/tasks` clears them all for a project. Finished work
 is otherwise kept forever, and a stale failure reads like a fresh one. The event
 log keeps the history either way.
+
+### `GET /api/v1/agents/{id}/activity`
+
+What the agent has actually been doing: the commands it ran, the files it edited,
+its own state transitions and any errors. Read from the agent server rather than
+from our tables, because the transcript only holds what was said — this is the
+only place the work between two turns exists.
+
+```json
+{
+  "session": "89a76ce6...",
+  "status": "running",
+  "activity": [
+    {"id": 12, "at": "...", "source": "agent", "kind": "command",
+     "title": "$ pytest -q", "detail": null, "ok": null},
+    {"id": 13, "at": "...", "source": "agent", "kind": "output",
+     "title": "exit 1", "detail": "1 failed, 2 passed", "ok": false},
+    {"id": 14, "at": "...", "source": "agent", "kind": "state",
+     "title": "running", "detail": null, "ok": null}
+  ]
+}
+```
+
+`after=<last id seen>` returns only what is new, so the panel can poll. An
+unreachable agent server (a workspace still starting) returns an empty feed with
+`unavailable` set rather than an error, because that is an ordinary state.

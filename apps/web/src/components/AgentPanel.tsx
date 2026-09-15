@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ProjectDetail } from "../types";
 import { Divider, useDragSize } from "./Splitter";
+import { ActivityFeed } from "./ActivityFeed";
 import { TaskSidebar } from "./TaskSidebar";
 import { StatusDot } from "./StatusDot";
 
@@ -247,6 +248,10 @@ export function AgentPanel({ project }: { project: ProjectDetail }) {
                   <pre className="whitespace-pre-wrap font-sans">{message.content}</pre>
                 </div>
               ))}
+
+              {/* The actions between the turns above. A task in progress used to
+                  show nothing at all until it finished. */}
+              {selected && <ActivityFeed agentId={selected.id} />}
             </div>
 
             <form

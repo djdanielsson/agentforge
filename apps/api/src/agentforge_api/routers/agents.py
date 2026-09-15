@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from agentforge_shared.config import get_settings
 from agentforge_shared.enums import AgentStatus, EventType, Priority, TaskKind
-from agentforge_shared.models import Agent, Project
+from agentforge_shared.models import Agent, Project, Workspace
 from agentforge_shared.permissions import AgentPermissions
 from agentforge_shared.schemas import (
     AgentMessageIn,
@@ -15,6 +16,7 @@ from agentforge_shared.schemas import (
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
+from ..activity import client_for, summarise_all
 from ..deps import DbSession
 from ..services import create_task, record_event
 
@@ -149,6 +151,43 @@ def post_message(session: DbSession, agent_id: str, payload: AgentMessageIn) -> 
 def get_conversation(session: DbSession, agent_id: str) -> dict:
     agent = _get_agent(session, agent_id)
     return {"agent_id": agent.id, "messages": agent.conversation or []}
+
+
+@router.get("/{agent_id}/activity")
+def get_activity(session: DbSession, agent_id: str, after: int = 0, limit: int = 200) -> dict:
+    """What the agent has actually been doing.
+
+    Read from the agent server rather than from our own tables: turns are stored,
+    but the commands and edits between them only exist in that stream, and a task
+    that is running had nothing to show at all.
+
+    `after` is the last event id the caller has already seen, so polling costs one
+    request and returns only what is new.
+    """
+    agent = _get_agent(session, agent_id)
+    if not agent.session_id:
+        return {"session": None, "status": str(agent.status), "activity": []}
+
+    workspace = session.get(Workspace, agent.workspace_id) if agent.workspace_id else None
+    settings = get_settings()
+    url = (workspace.agent_server_url if workspace else None) or settings.openhands_url
+    try:
+        with client_for(url, api_key=settings.agent_server_api_key) as client:
+            events = client.events(agent.session_id, start_id=after, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        # A workspace mid-restart is an ordinary state. The dashboard shows the
+        # feed as unavailable rather than an error page.
+        return {
+            "session": agent.session_id,
+            "status": str(agent.status),
+            "activity": [],
+            "unavailable": f"{type(exc).__name__}: {exc}"[:300],
+        }
+    return {
+        "session": agent.session_id,
+        "status": str(agent.status),
+        "activity": summarise_all(events),
+    }
 
 
 @router.post("/{agent_id}/permissions", response_model=AgentRead)

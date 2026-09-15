@@ -147,3 +147,16 @@ export interface ModelOption {
   /** What the picker shows: the model, and how hard it is asked to think. */
   label: string;
 }
+
+/** One thing the agent did, as the panel shows it. */
+export interface ActivityItem {
+  id: number | null;
+  at: string | null;
+  source: "agent" | "user" | "environment" | string | null;
+  /** message | thought | command | output | edit | read | browse | state | error | … */
+  kind: string;
+  title: string | null;
+  detail: string | null;
+  /** Set for command output: false when the command failed. */
+  ok: boolean | null;
+}
