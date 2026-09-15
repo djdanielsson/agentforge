@@ -275,7 +275,13 @@ def get_project_detail(name_or_id: str) -> dict[str, Any]:
 
 
 def delete_project(name_or_id: str) -> None:
-    settings = get_settings()
+    """Forget a project and tear its workspace down.
+
+    The row disappears immediately and the destruction happens on a worker
+    thread: destroying a DevPod workspace is a CLI call that can take minutes,
+    and a DELETE that blocks that long reads as a hang. The route already
+    answers 202; this makes that answer truthful.
+    """
     with session_scope() as session:
         project = get_project(session, name_or_id)
         reference = (
@@ -288,21 +294,36 @@ def delete_project(name_or_id: str) -> None:
             session.query(model).filter(model.project_id == project.id).delete()
         session.delete(project)
 
-    if reference:
-        provider = get_workspace_provider(None, settings)
-        try:
-            provider.destroy(reference)
-        except Exception as exc:  # noqa: BLE001 - the row is gone; report loudly
-            log.error("failed to destroy workspace %s: %s", reference, exc)
-            publish_sync(
-                "workspace.destroy_failed",
-                message=f"{type(exc).__name__}: {exc}",
-                project_id=project_id,
-                payload={"reference": reference},
-            )
     publish_sync(
         "project.deleted", message=f"project {project_name} deleted", project_id=project_id
     )
+    if reference:
+        threading.Thread(
+            target=_destroy_workspace,
+            args=(reference, project_id),
+            daemon=True,
+            name=f"destroy-{reference}",
+        ).start()
+
+
+def _destroy_workspace(reference: str, project_id: str) -> None:
+    provider = get_workspace_provider(None, get_settings())
+    try:
+        provider.destroy(reference)
+        publish_sync(
+            "workspace.destroyed",
+            message=f"workspace {reference} destroyed",
+            project_id=project_id,
+            payload={"reference": reference},
+        )
+    except Exception as exc:  # noqa: BLE001 - the row is gone; report loudly
+        log.error("failed to destroy workspace %s: %s", reference, exc)
+        publish_sync(
+            "workspace.destroy_failed",
+            message=f"{type(exc).__name__}: {exc}",
+            project_id=project_id,
+            payload={"reference": reference},
+        )
 
 
 # --- workspaces --------------------------------------------------------------
