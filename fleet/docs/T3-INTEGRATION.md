@@ -259,21 +259,28 @@ MCP server for the same reason.
 
 ## Using it
 
-Pair a client (the environment prints a pairing link on startup, but that link has
-the pod IP in it — mint one for the tailnet URL instead):
+Pair a client. The environment prints a pairing link on startup, but that link
+contains the **pod IP**, not the tailnet name — mint one for the URL you will
+actually open:
 
 ```bash
-POD=$(kubectl -n fleet get pod -l app.kubernetes.io/name=fleet-t3 -o name)
-kubectl -n fleet exec "$POD" -- t3 auth pairing create \
+# no kubectl needed: the fleet API runs the command inside the environment
+curl -sS -X POST https://fleet-cp-ingress.tail7f3c08.ts.net/api/v1/projects/checkout-alpha/workspace/exec \
+  -H 'Content-Type: application/json' -d '{"command":
+    "t3 auth pairing create --base-dir /state/t3code --ttl 30m --label laptop \
+       --base-url https://fleet-t3-ingress.tail7f3c08.ts.net"}' | jq -r .stdout
+
+# or, with kubectl:
+kubectl -n fleet exec deploy/fleet-t3 -- t3 auth pairing create \
   --base-dir /state/t3code --ttl 30m --label laptop \
   --base-url https://fleet-t3-ingress.tail7f3c08.ts.net
 ```
 
-That prints a `/pair#token=...` URL. Open it on a machine on the tailnet and the
-web client pairs. `t3 auth session issue` mints a bearer token instead, for
-headless clients: `curl -H "Authorization: Bearer <token>"
-http://127.0.0.1:5733/api/orchestration/snapshot` is the whole of the read API a
-script needs.
+Both print a `/pair#token=...` URL to open on a machine on the tailnet; the web
+client pairs on first load. `t3 auth session issue` mints a bearer token instead,
+for headless clients: `curl -H "Authorization: Bearer <token>"
+http://127.0.0.1:5733/api/orchestration/snapshot` (from inside the pod) is the
+whole of the read API a script needs.
 
 Create a project in the environment:
 
@@ -302,6 +309,7 @@ section was written at):
 | --- | --- |
 | T3 serves headlessly in the cluster | pod log: `T3 Code server is ready` + `Listening on http://0.0.0.0:5733`; `GET / -> 200` from inside the pod |
 | a checkout project provisioned | `POST /api/v1/projects` with `workspace.provider: checkout` → workspace `ready`, `create_output`: `CLONE_OK / BRANCH=fleet / T3_REGISTERED` |
+| a pairing link can be minted for the tailnet URL | `t3 auth pairing create --base-url https://fleet-t3-ingress.tail7f3c08.ts.net` reports an expiry and a `/pair#token=…` URL (12-char token, not reproduced here) |
 | the checkout is a real clone of the private repo | `git log --oneline` inside the pod shows the branch's commits; `git remote get-url origin` is the clean URL, and `grep -c x-access-token .git/config` is 0 |
 | the project is visible to T3 | `GET /api/orchestration/snapshot` on the environment's own server lists it with `workspaceRoot: /projects/checkout-alpha` |
 | the MCP server is reachable to the CLI the environment ships | `opencode mcp list` inside the pod: `✓ fleet connected  http://fleet-api.fleet.svc.cluster.local:8000/mcp` |
