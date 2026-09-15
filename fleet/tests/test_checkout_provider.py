@@ -171,11 +171,30 @@ def test_create_writes_the_config_where_t3_sessions_will_find_it(no_real_cluster
     provider = _provider(environment)
     provider.create(_spec())
     writes = "\n".join(script for script, _ in environment.writes)
+    commands = "\n".join(environment.commands)
     assert "/projects/demo/.fleet/opencode.json" in writes
-    # The project-root copy is what opencode reads for a session in that dir,
-    # and it is excluded from git locally so the checkout stays clean.
+    # The project-root copy is what opencode reads for a session in that dir.
     assert "cp /projects/demo/.fleet/opencode.json /projects/demo/opencode.json" in writes
-    assert "/projects/demo/.git/info/exclude" in writes
+    # Fleet's own files are excluded from git locally, so the checkout stays
+    # clean for T3 and for an agent looking at `git status`.
+    assert ".git/info/exclude" in commands
+    for entry in ("opencode.json", ".fleet/"):
+        assert entry in commands
+
+
+def test_a_non_empty_checkout_directory_does_not_break_the_clone(no_real_cluster):  # noqa: ARG001
+    """`.fleet/` exists before the clone, and `git clone` refuses a non-empty path.
+
+    That is not hypothetical: it is how the first live provisioning failed —
+    `fatal: destination path '/projects/checkout-alpha' already exists and is not
+    an empty directory`. The clone goes to a scratch directory and is copied in.
+    """
+    environment = FakeT3Environment()
+    provider = _provider(environment)
+    provider.create(_spec())
+    clone = next(command for command in environment.commands if "git clone" in command)
+    assert "scratch" in clone
+    assert 'cp -a "$scratch/repo/." /projects/demo/' in clone
 
 
 def test_credentials_come_from_the_control_plane_namespace(no_real_cluster):  # noqa: ARG001

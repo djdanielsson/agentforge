@@ -371,6 +371,11 @@ class CheckoutWorkspaceProvider(WorkspaceProvider):
         url = shlex.quote(spec.repository_url)
         branch = shlex.quote(spec.repository_branch or "main")
         agent_user = shlex.quote(self.settings.workspace_agent_user)
+        # The clone lands in a scratch directory and is copied in. `git clone`
+        # refuses a non-empty destination, and this directory is already
+        # non-empty by the time we get here: `.fleet/` has to exist *before* the
+        # clone, because the clone is authenticated with a credential that lives
+        # in it.
         return f"""set -u
 export PATH=/usr/local/bin:$PATH
 mkdir -p {shlex.quote(self.settings.t3_projects_dir)} {home}
@@ -380,23 +385,35 @@ elif [ -n {url} ]; then
   repo_url={url}
   [ -f {credentials} ] && . {credentials}
   if [ -n "${{GITHUB_TOKEN:-}}" ]; then
-    repo_url=$(printf '%s' "$repo_url" | \
+    repo_url=$(printf '%s' "$repo_url" | \\
       sed -E 's#^https://#https://x-access-token:${{GITHUB_TOKEN}}@#')
   fi
-  if clone_out=$(git clone --branch {branch} "$repo_url" {root} 2>&1); then
+  scratch=$(mktemp -d)
+  if clone_out=$(git clone --branch {branch} "$repo_url" "$scratch/repo" 2>&1); then
+    mkdir -p {root}
+    cp -a "$scratch/repo/." {root}/
     echo CLONE_OK
   else
     # `sed` masks the token so a retry's log cannot leak it.
-    echo "CLONE_ERROR=$(printf '%s' "$clone_out" | \
+    echo "CLONE_ERROR=$(printf '%s' "$clone_out" | \\
       sed -E 's#x-access-token:[^@]*@#x-access-token:***@#g' | tail -n 1)"
     echo CLONE_FAILED
   fi
+  rm -rf "$scratch"
   git -C {root} remote set-url origin {url} 2>/dev/null || true
 else
   git init -q {root}
-  git -C {root} -c user.email=fleet@localhost -c user.name=fleet \
+  git -C {root} -c user.email=fleet@localhost -c user.name=fleet \\
     commit -q --allow-empty -m 'fleet: empty checkout'
   echo CLONE_EMPTY
+fi
+if [ -d {root}/.git/info ]; then
+  # Fleet's own files in the checkout stay out of `git status` — locally, never
+  # committed, so a checkout does not look dirty to T3 or to an agent.
+  for entry in opencode.json .fleet/; do
+    grep -qxF "$entry" {root}/.git/info/exclude 2>/dev/null || \\
+      echo "$entry" >> {root}/.git/info/exclude
+  done
 fi
 if id -u {agent_user} >/dev/null 2>&1; then
   chown -R {agent_user}:{agent_user} {root} 2>/dev/null || true
@@ -505,10 +522,6 @@ fi
                 f"{shlex.quote(layout.config_path)}; "
                 f"chmod 644 {shlex.quote(layout.config_path)}; "
                 f"cp {shlex.quote(layout.config_path)} {shlex.quote(root_config)}; "
-                f"if [ -d {shlex.quote(layout.root + '/.git/info')} ]; then "
-                f"grep -qxF opencode.json {shlex.quote(layout.root + '/.git/info/exclude')} "
-                "2>/dev/null || echo opencode.json >> "
-                f"{shlex.quote(layout.root + '/.git/info/exclude')}; fi; "
                 f"{self._chown_to_agent(layout.config_path)}; "
                 f"{self._chown_to_agent(root_config)}",
             ],
