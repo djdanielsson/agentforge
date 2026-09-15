@@ -1,0 +1,6 @@
+apiVersion: v2
+name: fleet
+description: A control plane for a fleet of AI coding agents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

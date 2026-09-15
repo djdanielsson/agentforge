@@ -1,0 +1,75 @@
+# Fleet control-plane values.
+#
+# The image tag is set at deploy time by the build script; nothing here should
+# need editing to redeploy a new build.
+
+namespace: fleet
+
+image:
+  repository: registry.registry.svc:5000/fleet-api
+  tag: latest
+  pullPolicy: Always
+
+replicaCount: 1
+
+# The API token clients must present. Empty means an unauthenticated prototype,
+# which the API logs loudly and reports at /api/v1/health.
+apiToken: ""
+
+# The LLM gateway. The master key is never a value here: it is copied into the
+# namespace's own Secret by the deploy script, from the gateway that already
+# runs in the cluster (SPEC §11).
+llm:
+  gatewayUrl: http://agentforge-llm.agentforge.svc.cluster.local:4000
+  defaultModel: local-coder
+  models:
+    - local-coder
+    - fast
+    - smart
+  secretName: fleet-llm
+
+# DevPod is the workspace provider (SPEC §4). The control plane creates one
+# namespace per project, named "<namespacePrefix><project>", through
+# `devpod up --provider-option KUBERNETES_NAMESPACE=...`.
+workspace:
+  provider: devpod
+  devpodVersion: v0.6.15
+  # The devcontainer image DevPod provisions from. Reached anonymously, which
+  # DevPod requires because it inspects the image manifest before starting.
+  image: mcr.microsoft.com/devcontainers/base:ubuntu-24.04
+  namespacePrefix: fleet-
+  storageClass: local-path
+  defaultStorage: 5Gi
+  nodeVersion: v24.21.0
+  opencodeVersion: 1.18.31
+  t3Version: 0.0.40
+  t3Enabled: true
+
+# Where the control plane is reachable from inside a workspace, for the LLM
+# proxy and for injected tokens.
+controlPlaneUrl: ""
+
+tailnetDomain: tail7f3c08.ts.net
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: local-path
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi
+
+tailscaleIngress:
+  enabled: true
+  # The tailscale operator derives the MagicDNS name from the namespace and this
+  # object's name: <namespace>-<name>-ingress.<tailnet>.
+  name: ts
+
+service:
+  port: 80
+  targetPort: 8000

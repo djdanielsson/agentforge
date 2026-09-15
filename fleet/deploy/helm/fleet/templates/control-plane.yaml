@@ -1,0 +1,153 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-data
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: {{ .Values.persistence.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fleet.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # The prototype persists to SQLite on a ReadWriteOnce volume, so a second
+  # replica would corrupt it. That is the honest constraint of this choice.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fleet
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "fleet.labels" . | nindent 8 }}
+      annotations:
+        # A changed value here restarts the pod. Changing only an env value
+        # would otherwise leave the running process on the old configuration.
+        fleet.io/config-revision: "{{ .Values.workspace.provider }}-{{ .Values.llm.defaultModel }}-{{ .Values.workspace.t3Enabled }}"
+    spec:
+      serviceAccountName: {{ include "fleet.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: FLEET_NAMESPACE
+              value: {{ .Values.namespace | quote }}
+            - name: FLEET_DATA_DIR
+              value: /data
+            - name: FLEET_DATABASE_URL
+              value: sqlite:////data/fleet.db
+            - name: FLEET_DEVPOD_HOME
+              value: /data/devpod
+            - name: FLEET_KUBECONFIG
+              value: /data/kubeconfig
+            - name: FLEET_WORKSPACE_PROVIDER
+              value: {{ .Values.workspace.provider | quote }}
+            - name: FLEET_WORKSPACE_IMAGE
+              value: {{ .Values.workspace.image | quote }}
+            - name: FLEET_WORKSPACE_STORAGE
+              value: {{ .Values.workspace.defaultStorage | quote }}
+            - name: FLEET_WORKSPACE_STORAGE_CLASS
+              value: {{ .Values.workspace.storageClass | quote }}
+            - name: FLEET_NAMESPACE_PREFIX
+              value: {{ .Values.workspace.namespacePrefix | quote }}
+            - name: FLEET_NODE_VERSION
+              value: {{ .Values.workspace.nodeVersion | quote }}
+            - name: FLEET_OPENCODE_VERSION
+              value: {{ .Values.workspace.opencodeVersion | quote }}
+            - name: FLEET_T3_VERSION
+              value: {{ .Values.workspace.t3Version | quote }}
+            - name: FLEET_T3_ENABLED
+              value: {{ .Values.workspace.t3Enabled | quote }}
+            - name: FLEET_TAILNET_DOMAIN
+              value: {{ .Values.tailnetDomain | quote }}
+            - name: FLEET_LLM_GATEWAY_URL
+              value: {{ .Values.llm.gatewayUrl | quote }}
+            - name: FLEET_LLM_DEFAULT_MODEL
+              value: {{ .Values.llm.defaultModel | quote }}
+            - name: FLEET_LLM_MODELS
+              value: {{ join "," .Values.llm.models | quote }}
+            - name: FLEET_CONTROL_PLANE_URL
+              value: {{ default (printf "http://%s.%s.svc.cluster.local:8000" (include "fleet.fullname" .) .Values.namespace) .Values.controlPlaneUrl | quote }}
+            - name: FLEET_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-api
+                  key: api-token
+                  optional: true
+            - name: FLEET_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-api
+                  key: token-secret
+                  optional: true
+            # The gateway master key, read from the cluster's own Secret so no
+            # key value ever passes through values.yaml, a shell, or a log.
+            - name: FLEET_LLM_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.secretName }}
+                  key: LITELLM_MASTER_KEY
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fleet.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: fleet
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}

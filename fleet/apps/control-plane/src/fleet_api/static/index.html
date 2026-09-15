@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Control Plane</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2128; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --ok: #3fb950;
+    --warn: #d29922; --err: #f85149; --busy: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0;
+    background: rgba(13,17,23,.9); backdrop-filter: blur(6px); z-index: 5; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+  .grow { flex: 1; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
+    font-size: 12px; color: var(--dim); }
+  main { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.2fr);
+    gap: 16px; padding: 16px 20px 40px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; }
+  .stack { display: flex; flex-direction: column; gap: 16px; }
+  .card { background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .card:last-child { margin-bottom: 0; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row.between { justify-content: space-between; }
+  .name { font-weight: 600; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .dim { color: var(--dim); }
+  .status { border-radius: 999px; padding: 1px 8px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .5px; border: 1px solid; }
+  .s-ready, .s-completed, .s-idle { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+  .s-provisioning, .s-starting, .s-queued, .s-running, .s-busy { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+  .s-failed, .s-error, .s-cancelled, .s-stopped { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+  .s-created, .s-pending { color: var(--dim); border-color: var(--line); }
+  button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  button.primary:hover { background: #388bfd; color: #fff; }
+  input, textarea, select { width: 100%; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px; }
+  label { display: block; font-size: 12px; color: var(--dim); margin: 8px 0 3px; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px; overflow: auto; max-height: 260px; font-size: 12px;
+    white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; }
+  .feed { max-height: 420px; overflow: auto; display: flex; flex-direction: column-reverse; gap: 4px; }
+  .ev { display: flex; gap: 8px; font-size: 12px; padding: 3px 0; border-bottom: 1px solid #21262d; }
+  .ev .t { color: var(--accent); min-width: 168px; }
+  .ev .m { color: var(--dim); flex: 1; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  a { color: var(--accent); }
+  .err { color: var(--err); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fleet Control Plane</h1>
+  <span class="pill" id="provider">provider: …</span>
+  <span class="pill" id="gw">gateway: …</span>
+  <span class="pill" id="usage">usage: …</span>
+  <span class="grow"></span>
+  <span class="pill" id="conn">connecting…</span>
+</header>
+
+<main>
+  <div class="stack">
+    <section class="panel">
+      <h2>New project</h2>
+      <form id="newproj">
+        <label for="pname">Name</label>
+        <input id="pname" placeholder="demo-alpha" required>
+        <label for="prepo">Repository URL (optional)</label>
+        <input id="prepo" placeholder="https://github.com/org/repo">
+        <div class="grid2">
+          <div>
+            <label for="pbranch">Branch</label>
+            <input id="pbranch" value="main">
+          </div>
+          <div>
+            <label for="ppolicy">LLM policy</label>
+            <select id="ppolicy">
+              <option value="localOnly">localOnly</option>
+              <option value="cloudAllowed">cloudAllowed</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:10px" class="row">
+          <button class="primary" type="submit">Create + provision</button>
+          <span class="dim" id="projmsg"></span>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Projects</h2>
+      <div id="projects"><span class="dim">loading…</span></div>
+    </section>
+
+    <section class="panel">
+      <h2>Submit a task</h2>
+      <form id="newtask">
+        <label for="tagent">Agent</label>
+        <select id="tagent"></select>
+        <label for="tprompt">Prompt</label>
+        <textarea id="tprompt" rows="3" placeholder="Create a file called hello.txt containing hello"></textarea>
+        <div style="margin-top:10px" class="row">
+          <button class="primary" type="submit">Run task</button>
+          <span class="dim" id="taskmsg"></span>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="panel">
+      <h2>Activity</h2>
+      <div class="feed" id="feed"></div>
+    </section>
+    <section class="panel">
+      <h2>Tasks</h2>
+      <div id="tasks"><span class="dim">no tasks yet</span></div>
+    </section>
+  </div>
+</main>
+
+<script>
+// The UI is a client of the same public API Hermes would use (SPEC §26).
+const TOKEN_KEY = "fleet.token";
+const state = { projects: [], agents: [], tasks: [], selected: null };
+
+function token() {
+  let t = localStorage.getItem(TOKEN_KEY);
+  if (!t) {
+    t = prompt("Fleet API token (blank if the deployment is unauthenticated):") || "";
+    localStorage.setItem(TOKEN_KEY, t);
+  }
+  return t;
+}
+
+async function api(path, options = {}) {
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const t = token();
+  if (t) headers["Authorization"] = "Bearer " + t;
+  const response = await fetch(path, { ...options, headers });
+  if (response.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    throw new Error("unauthorized — reload and enter the token again");
+  }
+  const text = await response.text();
+  let body;
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  if (!response.ok) throw new Error(JSON.stringify(body.detail ?? body).slice(0, 300));
+  return body;
+}
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const cls = (s) => "status s-" + String(s || "unknown").toLowerCase();
+
+function renderProjects() {
+  const host = document.getElementById("projects");
+  if (!state.projects.length) { host.innerHTML = '<span class="dim">no projects yet</span>'; return; }
+  host.innerHTML = state.projects.map((p) => {
+    const w = p.workspaces[0] || {};
+    return `<div class="card">
+      <div class="row between">
+        <span class="name">${esc(p.name)}</span>
+        <span class="${cls(w.status)}">${esc(w.status || "?")}</span>
+      </div>
+      <div class="row dim mono" style="margin-top:4px">
+        <span>${esc(w.provider || "?")}</span><span>·</span>
+        <span>ns ${esc(w.reference || "?")}</span>
+      </div>
+      ${p.repository.url ? `<div class="mono dim" style="margin-top:4px">${esc(p.repository.url)} @ ${esc(p.repository.branch)}</div>` : ""}
+      ${w.error ? `<div class="err" style="margin-top:6px">${esc(w.error)}</div>` : ""}
+      <div class="row" style="margin-top:8px">
+        <button data-act="refresh" data-p="${esc(p.name)}">status</button>
+        <button data-act="start" data-p="${esc(p.name)}">start</button>
+        <button data-act="stop" data-p="${esc(p.name)}">stop</button>
+        <button data-act="logs" data-p="${esc(p.name)}">logs</button>
+        <button data-act="task" data-p="${esc(p.name)}">+task</button>
+        <button data-act="delete" data-p="${esc(p.name)}">delete</button>
+        ${w.t3_url ? `<a href="${esc(w.t3_url)}" target="_blank" rel="noreferrer">open T3 →</a>` : ""}
+      </div>
+      <div class="row dim mono" style="margin-top:8px">
+        <span>${p.agents.length} agent(s)</span><span>·</span>
+        <span>${p.credentials.length} credential(s)</span><span>·</span>
+        <span>policy ${esc((p.llmPolicy || {}).mode || "?")}</span>
+      </div>
+      <div id="detail-${esc(p.name)}"></div>
+    </div>`;
+  }).join("");
+}
+
+function renderTasks() {
+  const host = document.getElementById("tasks");
+  if (!state.tasks.length) { host.innerHTML = '<span class="dim">no tasks yet</span>'; return; }
+  host.innerHTML = state.tasks.map((t) => `<div class="card">
+    <div class="row between">
+      <span class="mono dim">${esc(t.id)}</span>
+      <span class="${cls(t.status)}">${esc(t.status)}</span>
+    </div>
+    <div style="margin-top:4px">${esc(t.prompt)}</div>
+    <div class="row dim mono" style="margin-top:4px">
+      <span>agent ${esc(t.agent_id || "-")}</span>
+      ${t.git_branch ? `<span>· ${esc(t.git_branch)}</span>` : ""}
+      ${t.git_commit ? `<span>· ${esc(String(t.git_commit).slice(0, 10))}</span>` : ""}
+    </div>
+    ${t.error ? `<div class="err" style="margin-top:6px">${esc(String(t.error).slice(0, 400))}</div>` : ""}
+    ${t.result ? `<pre>${esc(String(t.result).slice(0, 1200))}</pre>` : ""}
+  </div>`).join("");
+}
+
+function renderAgentSelect() {
+  const select = document.getElementById("tagent");
+  const previous = select.value;
+  select.innerHTML = state.agents.map((a) =>
+    `<option value="${esc(a.id)}">${esc(a.name)} · ${esc(a.provider)}${a.status ? " (" + esc(a.status) + ")" : ""}</option>`
+  ).join("") || '<option value="">no agents yet</option>';
+  if (previous) select.value = previous;
+}
+
+async function refresh() {
+  const [projects, tasks, health, usage] = await Promise.all([
+    api("/api/v1/projects"), api("/api/v1/projects/" + (state.selected || "") + "/tasks").catch(() => ({ items: [] })),
+    api("/api/v1/health"), api("/api/v1/usage").catch(() => ({})),
+  ]);
+  state.projects = projects.items || [];
+  document.getElementById("provider").textContent = "provider: " + (health.configured_workspace_provider || "?");
+  document.getElementById("gw").textContent = "gateway: " + (health.llm_gateway_configured ? "configured" : "unset");
+  document.getElementById("usage").textContent =
+    `usage: ${usage.calls || 0} calls / ${usage.total_tokens || 0} tok`;
+
+  // Agents and tasks are shown for the first project (or the selected one) —
+  // this page is a control surface, not the full dashboard of SPEC §26.
+  const chosen = state.selected || (state.projects[0] && state.projects[0].name);
+  if (chosen) {
+    const [agents, taskList] = await Promise.all([
+      api(`/api/v1/projects/${encodeURIComponent(chosen)}/agents`),
+      api(`/api/v1/projects/${encodeURIComponent(chosen)}/tasks`),
+    ]);
+    state.agents = agents.items || [];
+    state.tasks = taskList.items || [];
+  } else { state.agents = []; state.tasks = []; }
+  renderProjects(); renderTasks(); renderAgentSelect();
+}
+
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-act]");
+  if (!button) return;
+  const project = button.dataset.p, action = button.dataset.act;
+  const detail = document.getElementById("detail-" + project);
+  try {
+    if (action === "delete") {
+      if (!confirm(`delete project ${project} and its namespace?`)) return;
+      await api("/api/v1/projects/" + encodeURIComponent(project), { method: "DELETE" });
+    } else if (action === "task") {
+      state.selected = project; renderAgentSelect();
+      document.getElementById("tprompt").focus();
+      return;
+    } else if (action === "logs") {
+      detail.innerHTML = '<span class="dim">loading logs…</span>';
+      const out = await api(`/api/v1/projects/${encodeURIComponent(project)}/workspace/logs?tail=60`);
+      detail.innerHTML = `<pre>${esc(out.logs)}</pre>`;
+      return;
+    } else {
+      detail.innerHTML = '<span class="dim">working…</span>';
+      const w = await api(`/api/v1/projects/${encodeURIComponent(project)}/workspace/${action}`, { method: "POST" });
+      detail.innerHTML = `<pre>${esc(JSON.stringify(w, null, 2))}</pre>`;
+    }
+    await refresh();
+  } catch (error) {
+    detail.innerHTML = `<div class="err">${esc(error.message)}</div>`;
+  }
+});
+
+document.getElementById("newproj").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = document.getElementById("projmsg");
+  message.textContent = "creating…";
+  try {
+    await api("/api/v1/projects", { method: "POST", body: JSON.stringify({
+      name: document.getElementById("pname").value,
+      repository: { url: document.getElementById("prepo").value, branch: document.getElementById("pbranch").value },
+      llmPolicy: { mode: document.getElementById("ppolicy").value },
+      credentials: [],
+    }) });
+    message.textContent = "created — provisioning in the background";
+    document.getElementById("pname").value = "";
+    state.selected = null;
+    await refresh();
+  } catch (error) { message.textContent = error.message; }
+});
+
+document.getElementById("newtask").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = document.getElementById("taskmsg");
+  const agent = document.getElementById("tagent").value;
+  if (!agent) { message.textContent = "no agent to assign to"; return; }
+  message.textContent = "submitting…";
+  try {
+    const task = await api(`/api/v1/agents/${encodeURIComponent(agent)}/tasks`, {
+      method: "POST", body: JSON.stringify({ prompt: document.getElementById("tprompt").value, priority: "normal" }) });
+    message.textContent = "queued " + task.id;
+    document.getElementById("tprompt").value = "";
+    await refresh();
+  } catch (error) { message.textContent = error.message; }
+});
+
+// Live activity: the same event stream an external client may subscribe to.
+function connect() {
+  const source = new EventSource("/api/v1/events/stream");
+  const badge = document.getElementById("conn");
+  source.onopen = () => { badge.textContent = "live"; };
+  source.onerror = () => { badge.textContent = "reconnecting…"; };
+  source.onmessage = (message) => {
+    let event; try { event = JSON.parse(message.data); } catch { return; }
+    if (event.type === "stream.ready") return;
+    const feed = document.getElementById("feed");
+    const row = document.createElement("div");
+    row.className = "ev";
+    row.innerHTML = `<span class="t">${esc(event.type)}</span><span class="m">${esc(event.message)}</span>`;
+    feed.prepend(row);
+    while (feed.children.length > 150) feed.removeChild(feed.lastChild);
+    if (/task\.(completed|failed)|workspace\.(ready|failed)|agent\./.test(event.type)) refresh().catch(() => {});
+  };
+}
+
+refresh().then(connect).catch((error) => {
+  document.getElementById("projects").innerHTML = `<div class="err">${esc(error.message)}</div>`;
+  connect();
+});
+setInterval(() => refresh().catch(() => {}), 20000);
+</script>
+</body>
+</html>

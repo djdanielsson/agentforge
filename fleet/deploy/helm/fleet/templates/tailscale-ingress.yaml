@@ -1,0 +1,22 @@
+{{- if .Values.tailscaleIngress.enabled }}
+# Tailnet access through the Tailscale Kubernetes operator.
+#
+# The operator turns this into an ingress proxy whose MagicDNS name is derived
+# from the namespace and this object's name, so no host is set here and the
+# operator provisions the certificate. One origin serves the UI, the API and the
+# event stream, so there is no CORS configuration to get wrong.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.tailscaleIngress.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: {{ include "fleet.fullname" . }}
+      port:
+        number: {{ .Values.service.port }}
+{{- end }}

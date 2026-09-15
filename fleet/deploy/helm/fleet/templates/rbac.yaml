@@ -1,0 +1,62 @@
+# The ServiceAccount the control plane runs as.
+#
+# It holds cluster-wide create/delete on namespaces, pods and the objects a
+# workspace consists of, because provisioning a project means creating a
+# namespace and a pod. It does *not* get a wildcard rule: workspaces themselves
+# never hold these permissions - their pods run with
+# automountServiceAccountToken false and no Role at all, which is the isolation
+# that matters (SPEC 18, 28).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "fleet.fullname" . }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["services", "persistentvolumeclaims", "secrets", "serviceaccounts", "configmaps", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "fleet.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "fleet.fullname" . }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "fleet.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fleet.fullname" . }}
+    namespace: {{ .Values.namespace }}
