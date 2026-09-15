@@ -53,6 +53,18 @@ kubectl -n fleet get secret fleet-api -o jsonpath='{.data.api-token}' | base64 -
 5. **Run a task.** Pick the agent, type a prompt, submit. The activity feed shows
    `task.created → task.started → task.completed` and the task card fills in with
    the agent's answer, the git branch and the commit it made.
+
+   The deployment already has this done for you: project **`verify-alpha`**, a
+   ready workspace and the OpenCode agent **`backend`**, with tasks
+   `tsk_8a00b1a42ecc` and `tsk_e88428a47f42` completed end to end through the
+   LLM proxy and attributed in `GET /api/v1/projects/verify-alpha/usage`.
+   See §10 of `docs/FINDINGS.md` for what that evidence is.
+
+   The model behind the `localOnly` policy is a small local one, and it does not
+   return `tool_calls` through the gateway — it writes its tool-call JSON into
+   the message text instead, so it answers but does not edit files. A prompt
+   like *"Reply with exactly the word: verified"* completes; the control plane,
+   the proxy and the attribution are what is being demonstrated.
 6. **Open T3 Code.** Once the workspace is ready, the `open T3 →` link appears on
    the project card, pointing at the project's own tailnet hostname.
 
@@ -226,6 +238,7 @@ single place to change them. The ones worth knowing:
 | --- | --- | --- |
 | `FLEET_NAMESPACE` | `fleet` | where the control plane itself runs |
 | `FLEET_NAMESPACE_PREFIX` | `fleet-` | project namespaces are `<prefix><project-slug>` |
+| `FLEET_WORKSPACE_AGENT_USER` | `vscode` | the unprivileged user an agent run drops to; `opencode run` deadlocks as root in the devcontainer image (FINDINGS §9.13) |
 | `FLEET_WORKSPACE_PROVIDER` | `devpod` | `devpod` or `kubernetes` |
 | `FLEET_WORKSPACE_IMAGE` | `mcr.microsoft.com/devcontainers/base:ubuntu-24.04` | the devcontainer image |
 | `FLEET_LLM_GATEWAY_URL` | LiteLLM in `agentforge` | routing; the control plane never talks to a model vendor |
@@ -253,6 +266,16 @@ single place to change them. The ones worth knowing:
   the agent's run command sources it.
 - **Agents never hold a model-provider credential.** They hold a project-scoped
   token for the fleet proxy, which is the only thing that knows the gateway key.
+- **An agent runs as an unprivileged user, not as root.** The control plane's
+  exec always lands as root (it has to: the bootstrap needs `apt-get`), so the
+  run itself drops privileges to `FLEET_WORKSPACE_AGENT_USER` (`vscode`) —
+  which is also what makes `opencode run` work at all in this image
+  (FINDINGS §9.13). Only the paths the agent works in — `.fleet/repo`,
+  `.fleet/worktrees`, `.fleet/tasks`, `credentials.env` — belong to it.
+- **A run's exit status is read, not assumed.** The exec status channel is read
+  by the same code `kubectl exec` uses, and "no status" is `-1`, which is a
+  failure. An error reported as success was the bug this deployment had
+  (FINDINGS §9.14).
 
 ## Known limits
 
@@ -266,3 +289,12 @@ Deliberately not built yet, per SPEC §36–§43:
   workspaces
 - SQLite, single replica
 - the full dashboard of SPEC §26 — the UI is one page on purpose
+
+Found by running it, and not yet fixed:
+
+- the local model the `localOnly` policy allows does not return `tool_calls`
+  through the gateway, so an agent answers in text and cannot edit files; a task
+  therefore proves the control plane, the proxy and the attribution rather than
+  the agent's file editing
+- the native Kubernetes provider has a workspace image that is built but has not
+  been exercised end to end (FINDINGS §10)

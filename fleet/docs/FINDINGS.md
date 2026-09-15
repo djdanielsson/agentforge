@@ -264,8 +264,8 @@ The agent/task come from `X-Fleet-Agent` / `X-Fleet-Task` headers that the
 workspace's opencode config fills from environment variables set per task run.
 
 **Confirmed:** the proxy's token round-trip, policy rejection and usage recording
-(unit tests). **Open:** a full `opencode run` through the proxy producing
-attributable rows — verified after deployment, see `README.md`.
+(unit tests), and a full `opencode run` through the proxy producing rows
+attributed to the project, the agent and the task — see §10.
 
 ---
 
@@ -462,6 +462,104 @@ synchronously, and destroying a DevPod workspace shells out to a CLI that can
 take minutes — enough that a 30-second client timed out while the project was in
 fact gone. Destruction moved to a worker thread.
 
+### 9.13 `opencode run` deadlocks as root — confirmed, and it is the last mile
+
+An agent task failed in 2.5 seconds with
+
+```
+{'type': 'error', 'sessionID': 'ses_…',
+ 'error': {'name': 'UnknownError',
+           'data': {'message': 'Unexpected server error. Check server logs for details.'}}}
+```
+
+and the control plane's log showed **no request to the LLM proxy at all**, so
+nothing about the gateway was involved yet. Running the same command the runner
+runs, in the same pod, isolated it. Three separate causes stacked up, in this
+order:
+
+**1. The workspace could not reach the proxy.** The generated config pointed at
+`http://fleet-api.fleet.svc.cluster.local:8000/llm/v1`, but the Service
+published port **80**:
+
+```
+$ curl -sv http://fleet-api.fleet.svc.cluster.local:8000/api/v1/health
+* Trying 10.43.238.116:8000...
+* connect to 10.43.238.116 port 8000 from 10.42.0.119 port 48956 failed: Connection refused
+```
+
+One number now: the Service port, the URL workspaces are given and the
+NetworkPolicy port are all 8000, and the policy's port is derived from the URL
+so the two cannot drift apart again.
+
+**2. The run never loaded the fleet provider.** `OPENCODE_CONFIG` was not in the
+environment the runner builds, and a Kubernetes exec does not read the
+devcontainer's `remoteEnv` — the same trap the PATH comment in `_env_prefix`
+already described. OpenCode's own log shows exactly what it loaded:
+
+```
+loading path=/root/.config/opencode/opencode.jsonc
+# …and nothing else: the run that failed never logged
+#   loading path=/workspaces/fleet-verify-alpha/.fleet/opencode.json
+```
+
+so `--model fleet/local-coder` named a provider opencode had never heard of.
+
+**3. With the provider loaded, the run hung forever as root.** The identical
+binary (same `sha256`, same version, same config, same directory) completed a
+run in ~2 s as uid 1000 and never returned as uid 0:
+
+```
+$ su vscode -c '… opencode run --model fleet/local-coder …'      # uid 1000
+{"type":"step_start", …}
+{"type":"text", …}
+{"type":"step_finish", "tokens":{"total":2088,"input":2046,"output":38}, …}
+exit=0
+
+$ setpriv --reuid=0 … opencode run --model fleet/local-coder …    # uid 0
+<no output, no exit, forever>
+```
+
+It is not the gateway: the same hang reproduces against a trivial local
+mock gateway that returns a canonical OpenAI SSE stream, and it reproduces only
+as root. The control plane's exec always lands as root, so an agent run now
+drops privileges itself:
+
+```
+setpriv --reuid=vscode --regid=vscode --init-groups env HOME=/home/vscode bash -lc …
+```
+
+and the paths the agent writes — `.fleet/repo`, `.fleet/worktrees`,
+`.fleet/tasks`, `credentials.env` — are handed to that user by the worktree
+step and by the workspace bootstrap. `FLEET_WORKSPACE_AGENT_USER` (default
+`vscode`) is the setting; an image with no such user keeps running as root,
+unchanged.
+
+This is the one to remember: `remoteEnv` does not exist for an exec, and a
+container that runs as root is not the same container for every program in it.
+
+### 9.14 An errored run was recorded as `completed` — confirmed
+
+`Cluster.exec` threw the exec status channel away and both workspace providers
+returned `ExecResult(command, 0, stdout=…)` — **a literal zero**. So
+`opencode run`'s exit status, which is the only thing that could have said
+"this failed", never reached the provider, and a run whose every model call was
+refused was stored as `status: completed` with the error text sitting in
+`result`. A control plane that reports an error as success is worse than one
+that reports nothing.
+
+The status is now read from the channel `kubectl exec` reads it from, and `-1`
+means **unknown**, which must not be able to read as success. Verified in the
+live pod:
+
+```
+'echo hello; exit 0'          -> exit=0
+'echo out; echo err >&2; exit 7' -> exit=7   output='out\nerr\n'
+'exit 3'                      -> exit=3
+```
+
+and, independently of the process status, an `error` event in opencode's JSON
+stream is a failure with the agent's own message in `error`.
+
 ---
 
 ## 10. Verified end to end
@@ -485,11 +583,31 @@ HTTP status or command output as evidence:
 | one namespace per project | two projects → `fleet-verify-alpha` and `fleet-verify-beta`, each with its own PVC and Service |
 | the toolchain installs itself in the workspace | `node v24.21.0`, `opencode 1.18.31`, and a gateway-routed `opencode.json` written by the bootstrap |
 | agent identity is per project | inside the workspace, the projected ServiceAccount namespace is `fleet-verify-alpha` |
-| events | `project.created → workspace.creating → workspace.ready → agent.created → task.created → task.started → …` |
+| events | `project.created → workspace.creating → workspace.ready → agent.created → task.created → task.started → task.completed → commit.created` |
+| **an OpenCode task runs end to end** | `POST /api/v1/agents/agt_f4c3152ddebd/tasks` → 202; `GET /api/v1/tasks/tsk_8a00b1a42ecc` → `status: completed`, `result` the agent's answer, `completedAt` 74s later |
+| **the run is attributed to the task** | `GET /api/v1/projects/verify-alpha/usage` → `by_task: {key: "tsk_8a00b1a42ecc", calls: 2, prompt_tokens: 2599, completion_tokens: 49}` |
+| a second task, same path | `tsk_e88428a47f42` → `completed`, `by_task: {calls: 2, prompt_tokens: 2586, completion_tokens: 30}` |
+| the run's own log is readable | `GET /api/v1/agents/{agent}/logs?task=tsk_8a00b1a42ecc` → 1159 bytes of opencode JSON events (this path was permanently empty before §9.13) |
+| a failed run is stored as failed | the pre-fix reproduction was stored as `completed`; after the fix the same shape returns `failed` with the agent's message in `error` (§9.14) |
+| the workspace can reach the proxy | from inside the workspace pod: `curl -o /dev/null -w %{http_code}` → `200` on `/api/v1/health` (was `Connection refused`, §9.13) |
 
 Findings that are **not** verified and are recorded as such: T3 Code serving on
 its tailnet hostname end to end (the server starts and the URL is published; the
 pairing flow through an Ingress was not driven), the native Kubernetes provider
 against its own image (the image build was fixed but not rebuilt and exercised),
 and the `devpod stop` → `devpod up` cycle preserving workspace files.
+
+Two things a reader should not mistake for success:
+
+- **The agent's answer is not a file.** The prompt asked for `FLEET_PROOF.txt`;
+  the local model the `localOnly` policy permits returns its tool call as *text*
+  (`{"name":"write","arguments":{…}}`) instead of a `tool_calls` field, so
+  opencode had nothing to execute and the worktree is unchanged. Probed directly
+  through the proxy with a `tools` array and `tool_choice: "auto"`: the gateway
+  answers `finish_reason: stop` and puts the JSON in `content`. The end-to-end
+  proof is therefore of the control plane, the proxy and the attribution, not of
+  the agent editing files.
+- **`usage` counts the calls that reached the gateway**, including the session
+  title and any retry, which is why one task is 2 calls and ~2.6k prompt tokens
+  rather than one.
 
