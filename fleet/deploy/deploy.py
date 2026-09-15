@@ -166,25 +166,48 @@ def copy_gateway_key() -> None:
     )
 
 
-def ensure_api_secret(token: str) -> None:
+def ensure_api_secret(token: str | None) -> None:
+    """Write the control plane's Secret.
+
+    `token is None` deploys without an operator token: the API is then open, and
+    says so in its log, which is the testing mode the UI's blank-token prompt
+    expects. The key is *removed* rather than blanked, and the signing secret is
+    carried over, so project-scoped gateway tokens already handed to workspaces
+    keep working.
+    """
     import hashlib
+    import secrets as pysecrets
+
+    data: dict[str, str] = {}
+    if token:
+        data["api-token"] = base64.b64encode(token.encode()).decode()
+        # A stable secret for signing project-scoped gateway tokens, derived so
+        # it survives a redeploy without being stored in git.
+        data["token-secret"] = base64.b64encode(
+            hashlib.sha256(f"fleet-token-secret::{token}".encode()).hexdigest().encode()
+        ).decode()
+    else:
+        existing = req(f"/api/v1/namespaces/{NAMESPACE}/secrets/fleet-api")
+        carried = None
+        if "__error__" not in existing:
+            carried = (existing.get("data") or {}).get("token-secret")
+        data["token-secret"] = carried or base64.b64encode(pysecrets.token_hex(32).encode()).decode()
 
     body = {
         "apiVersion": "v1",
         "kind": "Secret",
         "metadata": {"name": "fleet-api", "namespace": NAMESPACE},
         "type": "Opaque",
-        "data": {
-            "api-token": base64.b64encode(token.encode()).decode(),
-            # A stable secret for signing project-scoped gateway tokens,
-            # derived so it survives a redeploy without being stored in git.
-            "token-secret": base64.b64encode(
-                hashlib.sha256(f"fleet-token-secret::{token}".encode()).hexdigest().encode()
-            ).decode(),
-        },
+        "data": data,
     }
     apply(body)
-    print("  secret fleet-api present")
+    if token:
+        print("  secret fleet-api present (operator token set)")
+    else:
+        print(
+            "  secret fleet-api present WITHOUT an operator token: "
+            "the API is unauthenticated (testing only)"
+        )
 
 
 def wait_rollout(timeout: int = 180) -> str:
@@ -212,9 +235,18 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", required=True)
     parser.add_argument("--token", default="")
+    parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="deploy without an operator token; the API is then open (testing only)",
+    )
     args = parser.parse_args()
 
-    if args.token:
+    token: str | None
+    if args.no_auth:
+        token = None
+        print("!! --no-auth: deploying an UNAUTHENTICATED control plane (testing only)")
+    elif args.token:
         token = args.token
     else:
         with open(Path("/opt/data/work/.fleet-api-token")) as handle:

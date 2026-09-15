@@ -28,13 +28,27 @@ The control plane runs in the `fleet` namespace and is published on the tailnet:
 **<https://fleet-ts-ingress.tail7f3c08.ts.net>**
 
 (Confirm the exact name with
-`kubectl -n fleet get ingress ts -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'`.)
+`kubectl -n fleet get ingress cp -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'`.)
 
-You need the API token. It is in the `fleet-api` Secret:
+You need the API token — **unless the deployment is running without one.**
+
+This deployment currently runs *unauthenticated* (`deploy.py --no-auth`): the
+`api-token` key is absent from the Secret, `FLEET_API_TOKEN` is unset, the
+control plane logs `FLEET_API_TOKEN is unset: the API is unauthenticated` once at
+startup, and the page's token prompt accepts a blank field. That is a **testing
+mode**: an open control plane can create namespaces and run agents, so put a token
+back before anything else is pointed at it. A stale token left in a browser still
+works — the header is simply ignored.
+
+To run with one, deploy without `--no-auth` (the token comes from
+`--token`, or `/opt/data/work/.fleet-api-token`) and read it back:
 
 ```bash
-kubectl -n fleet get secret fleet-api -o jsonpath='{.data.api-token}' | base64 -d
+kubectl -n fleet get secret fleet-api -o jsonpath='{.data.api-token}' | base64 -d; echo
 ```
+
+Note that `api-token` is only ever in the cluster — the API does not return secret
+values, and the token is not stored in the vault.
 
 ### What to click
 
