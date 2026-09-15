@@ -157,6 +157,18 @@ ln -sf "$TOOLS/bin/npm" /usr/local/bin/npm 2>/dev/null || true
 ln -sf "$TOOLS/bin/opencode" /usr/local/bin/opencode 2>/dev/null || true
 ln -sf "$TOOLS/bin/t3" /usr/local/bin/t3 2>/dev/null || true
 
+# The agent runs as an unprivileged user (FINDINGS §9.13: `opencode run`
+# deadlocks as uid 0 in this image), while this bootstrap needs root. Hand over
+# the paths the agent writes, so the first task does not have to.
+AGENT_USER="${FLEET_AGENT_USER:-vscode}"
+if id -u "$AGENT_USER" >/dev/null 2>&1; then
+  AGENT_UID="$(id -u "$AGENT_USER")"
+  AGENT_GID="$(id -g "$AGENT_USER")"
+  chown -R "$AGENT_UID:$AGENT_GID" "$FLEET_HOME/repo" "$FLEET_HOME/tasks" 2>/dev/null || true
+  chown "$AGENT_UID:$AGENT_GID" "$FLEET_HOME/credentials.env" 2>/dev/null || true
+  log "handed .fleet/repo to $AGENT_USER ($AGENT_UID:$AGENT_GID)"
+fi
+
 touch "$MARKER"
 echo "ok $(date -u +%FT%TZ)" > "$STATUS"
 log "bootstrap complete"

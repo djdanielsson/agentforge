@@ -40,6 +40,11 @@ def render_definition(spec: WorkspaceSpec, settings: Settings, root: Path) -> Pa
         "FLEET_OPENCODE_VERSION": settings.opencode_version,
         "FLEET_T3_VERSION": settings.t3_version,
         "FLEET_T3_ENABLED": "true" if spec.t3_enabled else "false",
+        # The bootstrap runs as root (it has to: lifecycle hooks run as the
+        # devcontainer user and `apt-get` needs root), so it hands the paths the
+        # agent works in to the agent's own unprivileged user. `opencode run`
+        # deadlocks as root in this image (FINDINGS §9.13).
+        "FLEET_AGENT_USER": settings.workspace_agent_user,
         "FLEET_REPO_URL": spec.repository_url,
         "FLEET_REPO_BRANCH": spec.repository_branch,
         **spec.environment,

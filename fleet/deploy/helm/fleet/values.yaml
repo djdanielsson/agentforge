@@ -38,6 +38,9 @@ workspace:
   # DevPod requires because it inspects the image manifest before starting.
   image: mcr.microsoft.com/devcontainers/base:ubuntu-24.04
   namespacePrefix: fleet-
+  # The unprivileged user a workspace's agent run drops to. `opencode run`
+  # deadlocks as uid 0 in this devcontainer image (see docs/FINDINGS.md §9.13).
+  agentUser: vscode
   storageClass: local-path
   defaultStorage: 5Gi
   nodeVersion: v24.21.0

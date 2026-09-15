@@ -73,6 +73,8 @@ spec:
               value: {{ .Values.workspace.storageClass | quote }}
             - name: FLEET_NAMESPACE_PREFIX
               value: {{ .Values.workspace.namespacePrefix | quote }}
+            - name: FLEET_WORKSPACE_AGENT_USER
+              value: {{ .Values.workspace.agentUser | quote }}
             - name: FLEET_NODE_VERSION
               value: {{ .Values.workspace.nodeVersion | quote }}
             - name: FLEET_OPENCODE_VERSION

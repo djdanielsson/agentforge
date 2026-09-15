@@ -209,7 +209,11 @@ class DevPodKubernetesProvider(WorkspaceProvider):
                 "bash",
                 "-lc",
                 f"umask 077; mkdir -p {home}; "
-                f"head -c {len(payload.encode())} > {path}; chmod 600 {path}",
+                f"head -c {len(payload.encode())} > {path}; chmod 600 {path}; "
+                # The agent reads this as an unprivileged user (FINDINGS §9.13).
+                f'chown "$(id -u {self.settings.workspace_agent_user} 2>/dev/null || echo 0)":'
+                f'"$(id -g {self.settings.workspace_agent_user} 2>/dev/null || echo 0)" '
+                f"{path} 2>/dev/null || true",
             ],
             stdin_data=payload,
         )

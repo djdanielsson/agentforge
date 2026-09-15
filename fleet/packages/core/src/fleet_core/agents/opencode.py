@@ -16,18 +16,23 @@ import logging
 import shlex
 import shutil
 
+from ..config import Settings, get_settings
 from ..llm import gateway_token_env
 from ..workspaces.base import WorkspaceProvider
 from .base import AgentError, AgentProvider, AgentSpec, TaskOutcome, TaskRequest
 
 log = logging.getLogger(__name__)
 
+#: Where an unprivileged agent keeps its state when the image gives it no home.
+AGENT_HOME_FALLBACK = "/tmp/fleet-agent-home"
+
 
 class OpenCodeProvider(AgentProvider):
     name = "opencode"
 
-    def __init__(self, workspaces: WorkspaceProvider) -> None:
+    def __init__(self, workspaces: WorkspaceProvider, settings: Settings | None = None) -> None:
         self.workspaces = workspaces
+        self.settings = settings or get_settings()
 
     # --- helpers ----------------------------------------------------------
 
@@ -42,11 +47,57 @@ class OpenCodeProvider(AgentProvider):
     def _shell(self, spec: AgentSpec, script: str):
         return self.workspaces.execute(spec.workspace_reference, ["bash", "-lc", script])
 
+    def _agent_identity(self) -> str:
+        """A shell prologue that resolves the unprivileged user a run should use.
+
+        `opencode run` deadlocks when it runs as uid 0 in this devcontainer
+        image. The same binary, the same config and the same directory complete
+        a run in ~2s as uid 1000 and hang forever as root; the divergence is the
+        whole of it (verified in the live workspace — see docs/FINDINGS.md
+        §9.13). The control plane's exec always lands as root, so the run drops
+        privileges itself, and falls back to root when the image has no such
+        user (an image without one has no unprivileged path to offer).
+        """
+        user = shlex.quote(self.settings.workspace_agent_user)
+        return (
+            f"FLEET_AGENT_USER={user}; "
+            'if id -u "$FLEET_AGENT_USER" >/dev/null 2>&1; then '
+            'FLEET_AGENT_UID="$(id -u "$FLEET_AGENT_USER")"; '
+            'FLEET_AGENT_GID="$(id -g "$FLEET_AGENT_USER")"; '
+            'FLEET_AGENT_HOME="$(getent passwd "$FLEET_AGENT_USER" | cut -d: -f6)"; '
+            f'[ -n "$FLEET_AGENT_HOME" ] || FLEET_AGENT_HOME={AGENT_HOME_FALLBACK}; '
+            "mkdir -p \"$FLEET_AGENT_HOME\"; "
+            'chown "$FLEET_AGENT_UID:$FLEET_AGENT_GID" "$FLEET_AGENT_HOME" 2>/dev/null || true; '
+            "else FLEET_AGENT_UID=0; FLEET_AGENT_GID=0; FLEET_AGENT_HOME=/root; fi; "
+            "export FLEET_AGENT_USER FLEET_AGENT_UID FLEET_AGENT_GID FLEET_AGENT_HOME; "
+        )
+
+    def _as_agent(self, script: str) -> str:
+        """Run `script` as the workspace's unprivileged user, as root if it has none."""
+        inner = shlex.quote(script)
+        setpriv = (
+            'setpriv --reuid="$FLEET_AGENT_UID" --regid="$FLEET_AGENT_GID" --init-groups '
+            'env HOME="$FLEET_AGENT_HOME" bash -lc '
+        )
+        return (
+            self._agent_identity()
+            + 'if [ "$FLEET_AGENT_UID" = "0" ]; then bash -lc ' + inner + "; "
+            + "else " + setpriv + inner + "; fi"
+        )
+
+
     def _env_prefix(self, spec: AgentSpec, task_id: str = "") -> str:
         """The environment an agent run needs, inline for a non-login shell.
 
         Kubernetes exec does not read the devcontainer's `remoteEnv`, so the
-        tooling path and the gateway configuration have to be set explicitly.
+        tooling path, the opencode config *and* the gateway configuration have
+        to be set explicitly. `OPENCODE_CONFIG` was the one that was missed: the
+        run started with no `fleet` provider defined, so `--model
+        fleet/local-coder` referred to a provider opencode had never heard of
+        and died with `UnknownError: Unexpected server error` before a single
+        request reached the gateway. The devcontainer's `remoteEnv` names the
+        same file, so both paths agree on where the config lives.
+
         `FLEET_TASK_ID` travels into the gateway request as a header, which is
         what lets the control plane attribute tokens to the task (SPEC §13).
         """
@@ -55,12 +106,15 @@ class OpenCodeProvider(AgentProvider):
             "PATH": (
                 f"{home}/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             ),
-            "HOME": "/root",
+            "OPENCODE_CONFIG": f"{home}/opencode.json",
             **gateway_token_env(spec.project_id),
             "FLEET_AGENT": spec.name,
             "FLEET_TASK_ID": task_id,
             "FLEET_TASK_MODEL": spec.model,
         }
+        # HOME is deliberately not set here: the run is wrapped by `_as_agent`,
+        # which sets it to the *agent user's* home. Leaving it as `/root` gave an
+        # unprivileged opencode a home it could not write to.
         return " ".join(f"{k}={shlex.quote(v)}" for k, v in variables.items())
 
     # --- AgentProvider ----------------------------------------------------
@@ -103,21 +157,33 @@ class OpenCodeProvider(AgentProvider):
 
         # SPEC §25: each agent works in its own Git worktree so two agents on
         # one project cannot corrupt each other's tree.
+        #
+        # This runs as root (the control plane's exec always does) and then
+        # hands the paths the agent will write to the agent's own user: the run
+        # itself drops privileges, because `opencode run` deadlocks as root.
         prepare = f"""
 set -u
+{self._agent_identity()}
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 cd {shlex.quote(home + "/repo")} 2>/dev/null || {{ echo NO_REPO; exit 3; }}
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {{ echo NOT_A_REPO; exit 3; }}
-mkdir -p {shlex.quote(home + "/worktrees")}
+mkdir -p {shlex.quote(home + "/worktrees")} {shlex.quote(home + "/tasks")}
 if [ -d {shlex.quote(worktree)} ]; then
   echo WORKTREE_EXISTS
 else
   git worktree add -b {shlex.quote(branch)} {shlex.quote(worktree)} 2>&1 || \
     git worktree add {shlex.quote(worktree)} 2>&1
 fi
+# Everything the agent touches must belong to the agent's user, including
+# state a previous root-owned run left behind.
+chown -R "$FLEET_AGENT_UID:$FLEET_AGENT_GID" {shlex.quote(home + "/repo")} \
+  {shlex.quote(home + "/worktrees")} {shlex.quote(home + "/tasks")} 2>/dev/null || true
+chown "$FLEET_AGENT_UID:$FLEET_AGENT_GID" {shlex.quote(home + "/credentials.env")} \
+  2>/dev/null || true
 echo WORKTREE_READY {shlex.quote(worktree)}
 """
         prepared = self._shell(spec, prepare)
+
         if "WORKTREE_READY" not in prepared.stdout and "WORKTREE_EXISTS" not in prepared.stdout:
             return TaskOutcome(
                 status="failed",
@@ -146,7 +212,7 @@ echo WORKTREE_READY {shlex.quote(worktree)}
             f"--format json --auto {shlex.quote(request.prompt)} "
             f"2>&1 | tee -a {shlex.quote(log_path)}"
         )
-        result = self._shell(spec, run)
+        result = self._shell(spec, self._as_agent(run))
         output = result.stdout
 
         # `--format json` emits one JSON event per line; the last assistant text
@@ -171,7 +237,7 @@ echo "COMMIT=$commit"
 echo "BRANCH=$(git rev-parse --abbrev-ref HEAD)"
 git diff --name-only HEAD~1 2>/dev/null | head -20 || true
 """
-        committed = self._shell(spec, commit_script)
+        committed = self._shell(spec, self._as_agent(commit_script))
         detail: dict[str, object] = {"stage": "run"}
         commit_sha = ""
         branch_name = branch

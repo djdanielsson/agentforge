@@ -52,6 +52,11 @@ class Settings:
     workspace_storage: str = "5Gi"
     workspace_storage_class: str = "local-path"
     namespace_prefix: str = "fleet-"
+    #: The unprivileged user a workspace's agent runs as. `opencode run`
+    #: deadlocks as uid 0 in the devcontainer image this deployment uses, so the
+    #: control plane drops privileges for the *run* while the workspace's
+    #: bootstrap keeps the root it needs for `apt-get` (FINDINGS §9.13).
+    workspace_agent_user: str = "vscode"
     #: Ports a workspace may reach on the public internet. 80 is not optional in
     #: practice: apt fetches from archive.ubuntu.com over HTTP, and a workspace
     #: that cannot install a package cannot build anything.
@@ -103,6 +108,7 @@ class Settings:
             workspace_storage=os.environ.get("FLEET_WORKSPACE_STORAGE", "5Gi"),
             workspace_storage_class=os.environ.get("FLEET_WORKSPACE_STORAGE_CLASS", "local-path"),
             namespace_prefix=os.environ.get("FLEET_NAMESPACE_PREFIX", "fleet-"),
+            workspace_agent_user=os.environ.get("FLEET_WORKSPACE_AGENT_USER", "vscode"),
             workspace_egress_ports=[
                 int(p)
                 for p in os.environ.get("FLEET_WORKSPACE_EGRESS_PORTS", "80,443,22").split(",")

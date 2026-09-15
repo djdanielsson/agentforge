@@ -106,6 +106,11 @@ def test_opencode_provider_prepares_a_worktree_and_invokes_the_cli():
     assert "FLEET_LLM_TOKEN=" in script
     # And it picks up the project's credentials from its own workspace volume.
     assert "credentials.env" in script
+    # The fleet provider is defined in this file, and the run has to be told
+    # where it is: a Kubernetes exec does not inherit the devcontainer's
+    # `remoteEnv`. Without it opencode has no `fleet` provider at all and dies
+    # with `UnknownError: Unexpected server error` before reaching the gateway.
+    assert "OPENCODE_CONFIG=/workspaces/fleet-demo/.fleet/opencode.json" in script
 
 
 def test_opencode_provider_fails_loudly_without_a_repository():
@@ -161,6 +166,31 @@ def test_an_errored_run_is_a_failure_even_when_the_cli_exits_zero():
     assert outcome.status == "failed"
     assert "Unexpected server error" in outcome.error
     assert "UnknownError" in outcome.error
+
+
+def test_the_agent_run_drops_privileges_because_opencode_hangs_as_root():
+    """`opencode run` deadlocks as uid 0 in the devcontainer image.
+
+    Verified in the live workspace: the identical binary, config and directory
+    complete a run as uid 1000 and hang forever as root. The control plane's
+    exec always lands as root, so the run hands the work to the workspace's
+    unprivileged user, and gives it a home it can write to.
+    """
+    workspaces = FakeWorkspaceProvider()
+    provider = OpenCodeProvider(workspaces)
+    workspaces.respond(
+        "git worktree add", "WORKTREE_READY /workspaces/fleet-demo/.fleet/worktrees/backend\n"
+    )
+    provider.execute_task(agent_spec(), task_request())
+
+    script = " ".join(" ".join(command) for _, command in workspaces.commands)
+    assert "setpriv --reuid=" in script
+    assert "FLEET_AGENT_HOME=" in script
+    # An unprivileged opencode must not be handed root's home.
+    assert " HOME=/root" not in script
+    # The paths the agent writes to are handed over, including root-owned state
+    # a previous run left behind.
+    assert "chown -R" in script
 
 
 def test_a_run_that_exits_non_zero_is_a_failure():
