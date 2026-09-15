@@ -273,7 +273,7 @@ def test_destroy_removes_the_registration_and_the_directory(no_real_cluster):  #
     provider.destroy("demo")
     joined = "\n".join(environment.commands)
     assert "t3 project remove demo --force" in joined
-    assert "rm -rf -- /projects/demo" in joined
+    assert "rm -rf -- /projects/demo /projects/.fleet/demo" in joined
 
 
 def test_capabilities_do_not_claim_isolation_this_provider_does_not_have(no_real_cluster):  # noqa: ARG001

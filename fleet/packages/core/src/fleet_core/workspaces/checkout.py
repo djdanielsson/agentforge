@@ -223,20 +223,24 @@ class CheckoutWorkspaceProvider(WorkspaceProvider):
     def destroy(self, reference: str) -> None:
         """Forget the project in T3 and delete its checkout.
 
-        The directory goes; the credentials file goes with it. Nothing else is
-        touched: the volume, the environment and every other project stay.
+        The directory goes, and with it the fleet state this project owns:
+        `/projects/.fleet/<name>/worktrees`, which is fleet's scratch space and
+        not the project's files. Nothing else is touched — the volume, the
+        environment and every other project stay. `t3 project remove` comes
+        first: removing a directory T3 still has a project row for leaves a
+        project whose checkouts are gone.
         """
         slug = self._checked(reference)
+        root = self.layout(slug).root
+        worktrees = f"{self.settings.t3_projects_dir.rstrip('/')}/.fleet/{slug}"
         result = self._run(
             [
                 "/bin/bash",
                 "-lc",
-                # `t3 project remove` first: removing a directory T3 still has a
-                # project row for leaves a project whose checkouts are gone.
                 "set -u; "
                 f"t3 project remove {shlex.quote(slug)} --force "
                 f'--base-dir {shlex.quote(self.settings.t3_home)} 2>&1 || true; '
-                f"rm -rf -- {shlex.quote(self.layout(slug).root)}; "
+                f"rm -rf -- {shlex.quote(root)} {shlex.quote(worktrees)}; "
                 "echo DESTROYED",
             ]
         )
