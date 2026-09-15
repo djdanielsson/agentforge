@@ -71,7 +71,14 @@ tailscaleIngress:
   enabled: true
   # The tailscale operator derives the MagicDNS name from the namespace and this
   # object's name: <namespace>-<name>-ingress.<tailnet>.
-  name: ts
+  #
+  # The name is not cosmetic: it is the TLS identifier the operator asks Let's
+  # Encrypt for, and that request is rate limited to five certificates per exact
+  # hostname per week. The first name (`ts`) was created and destroyed repeatedly
+  # while this deployment was being debugged, exhausted the limit and left the
+  # ingress serving nothing but a TLS handshake error. A new name is a new
+  # identifier, which is why this is `cp`.
+  name: cp
 
 service:
   # One number for the API everywhere: the container port, the ClusterIP port
