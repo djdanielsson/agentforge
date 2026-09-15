@@ -240,6 +240,11 @@ def main() -> int:
         action="store_true",
         help="deploy without an operator token; the API is then open (testing only)",
     )
+    parser.add_argument(
+        "--refresh-ingress",
+        action="store_true",
+        help="re-apply the Ingress (recreates the tailscale proxy and its certificate)",
+    )
     args = parser.parse_args()
 
     token: str | None
@@ -263,6 +268,18 @@ def main() -> int:
     for document in documents:
         if document.get("kind") == "Secret":
             continue
+        if document.get("kind") == "Ingress" and not args.refresh_ingress:
+            # Re-applying an Ingress that has not changed makes the tailscale
+            # operator tear down and rebuild its proxy, and this cluster's
+            # operator forces a fresh ACME order on every proxy start. Two of
+            # those exhaust the certificate quota for the hostname and the
+            # ingress then serves a TLS handshake error rather than the API.
+            # Nothing here changes it, so leave it alone unless asked.
+            name = document["metadata"]["name"]
+            existing = req(f"/apis/networking.k8s.io/v1/namespaces/{NAMESPACE}/ingresses/{name}")
+            if "__error__" not in existing:
+                print(f"  kept Ingress/{name} (already present; --refresh-ingress to re-apply)")
+                continue
         print("  " + apply(document))
 
     print("== rollout ==")
