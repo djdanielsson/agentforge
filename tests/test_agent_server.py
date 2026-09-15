@@ -175,6 +175,24 @@ def test_events_ask_for_a_cursor_and_a_limit(make_client):
     assert "start_id=7" in seen["url"] and "limit=25" in seen["url"]
 
 
+def test_the_first_page_carries_no_cursor_the_server_would_reject(make_client):
+    """`start_id=0` is a 400 from the server, not a synonym for "from the start".
+
+    Found by pointing the dashboard at a live conversation: every poll failed and
+    the activity panel stayed empty.
+    """
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=[])
+
+    make_client(handler).events("c-1")
+
+    assert "start_id" not in seen["url"]
+    assert "limit=100" in seen["url"]
+
+
 def test_wait_for_reply_follows_events_until_the_turn_ends(make_client):
     """A turn is not request/response: the message is queued, the reply is events."""
     calls = {"n": 0}

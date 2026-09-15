@@ -224,11 +224,20 @@ class AgentServerClient:
     # --- events -----------------------------------------------------------
 
     def events(self, session_id: str, *, start_id: int = 0, limit: int = 100) -> list[AgentEvent]:
+        """Events after `start_id`, oldest first.
+
+        The cursor is omitted when there is not one: the server answers
+        `start_id=0` with 400 rather than treating it as "from the beginning",
+        and the first page is what a missing cursor means anyway.
+        """
+        params: dict[str, int] = {"limit": limit}
+        if start_id > 0:
+            params["start_id"] = start_id
         data = (
             self._request(
                 "GET",
                 self._path("events", session_id=session_id),
-                params={"start_id": start_id, "limit": limit},
+                params=params,
             )
             or []
         )

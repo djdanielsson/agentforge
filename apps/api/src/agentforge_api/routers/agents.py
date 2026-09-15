@@ -173,7 +173,9 @@ def get_activity(session: DbSession, agent_id: str, after: int = 0, limit: int =
     url = (workspace.agent_server_url if workspace else None) or settings.openhands_url
     try:
         with client_for(url, api_key=settings.agent_server_api_key) as client:
-            events = client.events(agent.session_id, start_id=after, limit=limit)
+            events = client.events(
+                agent.session_id, start_id=after + 1 if after else 0, limit=limit
+            )
     except Exception as exc:  # noqa: BLE001
         # A workspace mid-restart is an ordinary state. The dashboard shows the
         # feed as unavailable rather than an error page.
