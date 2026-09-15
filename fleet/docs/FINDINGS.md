@@ -406,3 +406,90 @@ least privilege, and the native provider does better
 (`automountServiceAccountToken: false`, a Role that can only read ConfigMaps).
 Recorded as a limitation of using DevPod rather than a defect in this code.
 
+### 9.8 The workspace egress policy blocked `apt` — confirmed
+
+The first isolation policy allowed 443/22 plus DNS and the in-cluster gateway,
+on the reasoning that "package managers use HTTPS". Ubuntu's archive and
+security suites are fetched over **HTTP on port 80**:
+
+```
+W: Failed to fetch http://archive.ubuntu.com/ubuntu/dists/noble/InRelease
+   Could not connect to archive.ubuntu.com:80 (185.125.190.83). - connect (111: Connection refused)
+E: Package 'python3' has no installation candidate
+```
+
+The workspace could not install a compiler, so T3 Code never installed and the
+failure was a warning line in a log rather than an error. The allowlist is now a
+setting (`workspace_egress_ports`, default `80,443,22`), because "what a
+workspace may reach" is project policy and should not be folklore.
+
+### 9.9 A Kubernetes exec with stdin never finishes — confirmed
+
+The stream has no end-of-input signal. A remote `cat > file` therefore waits for
+an EOF that the client cannot send, and the reader loop waits for a command that
+will never exit: the project sat in `provisioning` with the pod `Running`, the
+bootstrap complete, and **nothing in any log**. Credentials are written with
+`head -c <bytes>` now, which terminates on its own, and every exec has a deadline
+so the next bug of this shape surfaces as an error instead of a hang.
+
+### 9.10 A converging namespace is not a created namespace — confirmed
+
+Handling "the previous project's namespace is still terminating" by waiting for
+it to disappear and then *returning* left the new project with no boundary at
+all; its credential copy then failed with a 404 for a namespace that never
+existed. Waiting has to be followed by creating.
+
+### 9.11 Lifecycle hooks run as `remoteUser`, not as root — confirmed
+
+DevPod runs the devcontainer's `postCreateCommand` as the devcontainer's
+`remoteUser`. With `remoteUser: vscode` that user cannot `apt-get`
+(`E: List directory /var/lib/apt/lists/partial is missing. - Acquire (13: Permission denied)`),
+so half the toolchain silently failed. Worse, the bootstrap then created the
+project's git repository as `vscode` while the control plane execs as `root`, and
+git refused to work in it:
+
+```
+fatal: detected dubious ownership in repository at '/workspaces/.../.fleet/repo'
+```
+
+which surfaced as every task failing with `NOT_A_REPO`. The workspace now runs as
+root, and the agent's run sets `safe.directory` regardless.
+
+### 9.12 `DELETE` blocked on the teardown — confirmed
+
+`DELETE /api/v1/projects/{p}` answered 202 but destroyed the workspace
+synchronously, and destroying a DevPod workspace shells out to a CLI that can
+take minutes — enough that a 30-second client timed out while the project was in
+fact gone. Destruction moved to a worker thread.
+
+---
+
+## 10. Verified end to end
+
+See the deployment section of [`../README.md`](../README.md) for the URL and the
+commands. What was actually exercised against the running deployment, with the
+HTTP status or command output as evidence:
+
+| what | evidence |
+| --- | --- |
+| control plane reachable on the tailnet | Ingress `fleet/ts` → `fleet-ts-ingress.tail7f3c08.ts.net` |
+| API authentication | `401` without a token, `401` with a wrong one, `200` with the real one |
+| project creation | `POST /api/v1/projects` → `201` |
+| credential values never returned | the value appears in no API response, and the event log was searched too |
+| real routing through LiteLLM | `GET /api/v1/models` → `{"source": "gateway", "models": ["local-coder","fast","smart"]}` |
+| project-scoped LLM access | `POST /llm/v1/chat/completions` with a project token → `200`, `model: local-coder`, a real completion |
+| a forged token is refused | `401 unknown project token` |
+| LLM policy enforced before spending | a `localOnly` project asking for `smart` → `403` |
+| usage attributed to the project | `GET /api/v1/projects/{p}/usage` → `{"calls": 1, "prompt_tokens": 35, "completion_tokens": 3}` grouped by model/agent/task |
+| DevPod provisions a project workspace | pod `devpod-default-fl-42410` in namespace `fleet-verify-alpha`, `Running` |
+| one namespace per project | two projects → `fleet-verify-alpha` and `fleet-verify-beta`, each with its own PVC and Service |
+| the toolchain installs itself in the workspace | `node v24.21.0`, `opencode 1.18.31`, and a gateway-routed `opencode.json` written by the bootstrap |
+| agent identity is per project | inside the workspace, the projected ServiceAccount namespace is `fleet-verify-alpha` |
+| events | `project.created → workspace.creating → workspace.ready → agent.created → task.created → task.started → …` |
+
+Findings that are **not** verified and are recorded as such: T3 Code serving on
+its tailnet hostname end to end (the server starts and the URL is published; the
+pairing flow through an Ingress was not driven), the native Kubernetes provider
+against its own image (the image build was fixed but not rebuilt and exercised),
+and the `devpod stop` → `devpod up` cycle preserving workspace files.
+

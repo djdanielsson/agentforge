@@ -19,6 +19,7 @@ from kubernetes import config as kube_config
 from kubernetes.config.config_exception import ConfigException
 from kubernetes.stream import stream
 
+from ..config import Settings
 from .base import ProviderError
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,77 @@ NAMESPACE_TERMINATE_TIMEOUT = 180
 #: Ceiling on one exec into a workspace. The stream has no EOF signal, so the
 #: only way to bound a command is by time.
 EXEC_TIMEOUT = 120
+
+
+def split_service_url(url: str, *, default_port: int) -> tuple[str, str, int]:
+    """(<namespace>, <service>, <port>) from an in-cluster service URL.
+
+    The shape is `<service>.<namespace>.svc[.cluster.local][:port]`, so the
+    namespace is the **second** label. Taking the remainder of the first dot
+    gave `agentforge.svc.cluster.local`, a namespaceSelector that matches no
+    namespace at all — the rule was written, accepted by the API server, and
+    silently matched nothing.
+    """
+    host = url.split("//", 1)[-1].split("/", 1)[0]
+    authority, _, port = host.partition(":")
+    labels = [label for label in authority.split(".") if label]
+    service = labels[0] if labels else ""
+    namespace = labels[1] if len(labels) > 1 else ""
+    return namespace, service, int(port or default_port)
+
+
+def control_plane_parts(settings: Settings) -> tuple[str, int]:
+    """The namespace and port a workspace must be able to reach to talk to us.
+
+    Derived from the same URL the workspaces are told to use, so the egress
+    policy and the workspace's config cannot drift apart. They did: workspaces
+    were pointed at `fleet-api.fleet.svc.cluster.local:8000` while the Service
+    published port 80, so every model call died on "connection refused" — and
+    the task still reported success.
+    """
+    url = settings.control_plane_url or (
+        f"http://{settings.namespace}-api.{settings.namespace}.svc.cluster.local:8000"
+    )
+    namespace, _, port = split_service_url(url, default_port=8000)
+    return namespace or settings.namespace, port
+
+
+@dataclass
+class ExecOutcome:
+    """What a command in a workspace actually did: its output *and* its status.
+
+    Returning the output alone made "the command failed" indistinguishable from
+    "the command succeeded and printed a warning". That is how an `opencode run`
+    whose every model call was refused got recorded as a completed task.
+    """
+
+    command: str
+    output: str = ""
+    exit_code: int = 0
+    timed_out: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0 and not self.timed_out
+
+
+def _remote_exit_code(handle: Any) -> int:
+    """The status the exec protocol reported, or -1 when it reported nothing.
+
+    `kubectl exec` gets its exit code from this channel; output alone carries
+    no status. -1 is deliberate: "unknown" must not be able to read as success.
+    """
+    try:
+        code = handle.returncode
+    except Exception as exc:  # noqa: BLE001 - a missing status is a finding, not a crash
+        log.warning("exec stream carried no exit status: %s", exc)
+        return -1
+    if callable(code):  # older clients expose it as a method
+        code = code()
+    if code is None:
+        return -1
+    return int(str(code))
+
 
 
 def load_client() -> client.ApiClient:
@@ -239,8 +311,8 @@ class Cluster:
         container: str | None = None,
         stdin_data: str | None = None,
         timeout: int = EXEC_TIMEOUT,
-    ) -> str:
-        """Run a command and return its combined output.
+    ) -> ExecOutcome:
+        """Run a command and return its output *and* its exit status.
 
         Raising is left to the caller: `execute` wants the exit status, not an
         exception, because "the agent's command failed" is normal.
@@ -248,20 +320,11 @@ class Cluster:
         `stdin_data` is written after the stream opens, which is how a secret
         reaches a file without ever appearing in `argv` — argv is visible in the
         pod's process list and in the API server's audit log.
-        """
-        if stdin_data is None:
-            return stream(
-                self.core.connect_get_namespaced_pod_exec,
-                pod,
-                namespace,
-                command=command,
-                container=container,
-                stderr=True,
-                stdin=False,
-                stdout=True,
-                tty=False,
-            )
 
+        The stream is always opened with `_preload_content=False` so the status
+        channel stays readable. Reading only the output is what made every
+        remote command look successful.
+        """
         handle = stream(
             self.core.connect_get_namespaced_pod_exec,
             pod,
@@ -269,12 +332,13 @@ class Cluster:
             command=command,
             container=container,
             stderr=True,
-            stdin=True,
+            stdin=stdin_data is not None,
             stdout=True,
             tty=False,
             _preload_content=False,
         )
-        handle.write_stdin(stdin_data)
+        if stdin_data is not None:
+            handle.write_stdin(stdin_data)
         chunks: list[str] = []
         # A deadline, because the stream has no end-of-input signal: a remote
         # command that waits for EOF waits forever, and an unbounded loop here
@@ -287,10 +351,14 @@ class Cluster:
             if handle.peek_stderr():
                 chunks.append(handle.read_stderr())
         timed_out = handle.is_open()
+        exit_code = _remote_exit_code(handle)
         handle.close()
+        output = "".join(chunks)
         if timed_out:
-            chunks.append(f"\n<fleet: exec timed out after {timeout}s>")
-        return "".join(chunks)
+            output += f"\n<fleet: exec timed out after {timeout}s>"
+        return ExecOutcome(
+            command=" ".join(command), output=output, exit_code=exit_code, timed_out=timed_out
+        )
 
     def apply_service(
         self,

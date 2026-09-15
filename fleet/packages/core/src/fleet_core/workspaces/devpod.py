@@ -37,7 +37,13 @@ from .. import secrets
 from ..config import Settings, get_settings
 from . import kubernetes_common
 from .base import ExecResult, ProviderError, WorkspaceProvider, WorkspaceSpec, WorkspaceState
-from .kubernetes_common import DEVPOD_POD_LABEL, Cluster, write_kubeconfig
+from .kubernetes_common import (
+    DEVPOD_POD_LABEL,
+    Cluster,
+    control_plane_parts,
+    split_service_url,
+    write_kubeconfig,
+)
 
 log = logging.getLogger(__name__)
 
@@ -410,7 +416,7 @@ class DevPodKubernetesProvider(WorkspaceProvider):
         if not pod:
             return ExecResult(" ".join(command), 127, stderr=f"no workspace pod in {reference}")
         try:
-            output = self.cluster.exec(
+            outcome = self.cluster.exec(
                 reference,
                 pod,
                 command,
@@ -419,7 +425,10 @@ class DevPodKubernetesProvider(WorkspaceProvider):
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a failed command
             return ExecResult(" ".join(command), 1, stderr=f"{type(exc).__name__}: {exc}")
-        return ExecResult(" ".join(command), 0, stdout=output)
+        # The remote status, not a literal zero: reporting the command's output
+        # with a hardcoded success is what let a failed agent run be recorded
+        # as a completed task.
+        return ExecResult(" ".join(command), outcome.exit_code, stdout=outcome.output)
 
     def get_logs(self, reference: str, *, tail: int = 200) -> str:
         pod = self.cluster.find_pod(reference, f"{DEVPOD_POD_LABEL}=true")
@@ -450,7 +459,8 @@ class DevPodKubernetesProvider(WorkspaceProvider):
         from kubernetes.client.exceptions import ApiException
 
         labels = {**self.settings.labels, "fleet.io/project": spec.project_name}
-        gateway_ns, _, _ = self._gateway_parts()
+        gateway_ns, _, gateway_port = self._gateway_parts()
+        control_ns, control_port = self._control_plane_parts()
         body = client.V1NetworkPolicy(
             metadata=client.V1ObjectMeta(
                 name=f"{spec.reference}-egress", namespace=spec.reference, labels=labels
@@ -477,11 +487,13 @@ class DevPodKubernetesProvider(WorkspaceProvider):
                         to=[
                             client.V1NetworkPolicyPeer(
                                 namespace_selector=client.V1LabelSelector(
-                                    match_labels={"kubernetes.io/metadata.name": gateway_ns}
+                                    match_labels={
+                                        "kubernetes.io/metadata.name": gateway_ns
+                                    }
                                 )
                             )
                         ],
-                        ports=[client.V1NetworkPolicyPort(protocol="TCP", port=4000)],
+                        ports=[client.V1NetworkPolicyPort(protocol="TCP", port=gateway_port)],
                     ),
                     # The control plane has to be reachable too: the agent's LLM
                     # calls go through it so they can be attributed (SPEC §13).
@@ -490,12 +502,12 @@ class DevPodKubernetesProvider(WorkspaceProvider):
                             client.V1NetworkPolicyPeer(
                                 namespace_selector=client.V1LabelSelector(
                                     match_labels={
-                                        "kubernetes.io/metadata.name": self.settings.namespace
+                                        "kubernetes.io/metadata.name": control_ns
                                     }
                                 )
                             )
                         ],
-                        ports=[client.V1NetworkPolicyPort(protocol="TCP", port=8000)],
+                        ports=[client.V1NetworkPolicyPort(protocol="TCP", port=control_port)],
                     ),
                     client.V1NetworkPolicyEgressRule(
                         # Package managers, Git and model APIs. Configurable,
@@ -520,11 +532,11 @@ class DevPodKubernetesProvider(WorkspaceProvider):
 
     def _gateway_parts(self) -> tuple[str, str, int]:
         """Split the configured gateway URL into namespace/service/port."""
-        url = self.settings.llm_gateway_url
-        host = url.split("//", 1)[-1].split("/", 1)[0]
-        authority, _, port = host.partition(":")
-        service, _, namespace = authority.partition(".")
-        return namespace or "agentforge", service or "agentforge-llm", int(port or 4000)
+        return split_service_url(self.settings.llm_gateway_url, default_port=4000)
+
+    def _control_plane_parts(self) -> tuple[str, int]:
+        """The namespace and port a workspace must reach to talk to us."""
+        return control_plane_parts(self.settings)
 
     def _ensure_service(self, reference: str, pod: str) -> None:
         self.cluster.apply_service(

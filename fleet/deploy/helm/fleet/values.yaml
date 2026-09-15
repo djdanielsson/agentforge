@@ -71,5 +71,9 @@ tailscaleIngress:
   name: ts
 
 service:
-  port: 80
+  # One number for the API everywhere: the container port, the ClusterIP port
+  # the workspaces dial and the tailnet Ingress backend are all this value.
+  # They were not, and it cost every agent run: workspaces were told to reach
+  # `fleet-api.fleet.svc.cluster.local:8000` while the Service published 80.
+  port: 8000
   targetPort: 8000

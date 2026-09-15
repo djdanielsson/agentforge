@@ -130,21 +130,30 @@ echo WORKTREE_READY {shlex.quote(worktree)}
         env = self._env_prefix(spec, request.task_id)
         model = f"fleet/{spec.model}"
         credentials = f"{home}/credentials.env"
+        log_path = f"{home}/tasks/{request.task_id}.log"
+        # `set -o pipefail` before the pipeline: `tee` exists so the run's own
+        # output is readable afterwards (`GET /agents/{id}/logs`), and without
+        # pipefail the pipeline would report tee's status instead of opencode's.
         run = (
-            f"cd {shlex.quote(worktree)} && "
+            f"cd {shlex.quote(worktree)} || {{ echo NO_WORKTREE; exit 3; }}; "
+            "set -o pipefail; "
             # The project's credentials are state in the workspace volume, not
             # in a command line (SPEC §16).
             f"set -a; [ -f {shlex.quote(credentials)} ] && . {shlex.quote(credentials)}; set +a; "
+            f"mkdir -p {shlex.quote(home + '/tasks')}; "
             f"{env} "
             f"timeout {request.timeout} opencode run --model {shlex.quote(model)} "
-            f"--format json --auto {shlex.quote(request.prompt)}"
+            f"--format json --auto {shlex.quote(request.prompt)} "
+            f"2>&1 | tee -a {shlex.quote(log_path)}"
         )
         result = self._shell(spec, run)
         output = result.stdout
 
         # `--format json` emits one JSON event per line; the last assistant text
-        # is the agent's answer.
+        # is the agent's answer, and an `error` event is a failure whatever the
+        # process said its exit status was.
         summary = _last_assistant_text(output)
+        run_error = _error_from_events(output)
 
         commit_script = f"""
 set -u
@@ -177,11 +186,15 @@ git diff --name-only HEAD~1 2>/dev/null | head -20 || true
             elif line and "/" in line and not line.startswith(" "):
                 files.append(line.strip())
 
-        status = "completed" if result.exit_code == 0 else "failed"
+        status = "completed" if result.exit_code == 0 and not run_error else "failed"
+        error = ""
+        if status == "failed":
+            error = run_error or _tail(output, 2000)
+        detail["exit_code"] = result.exit_code
         return TaskOutcome(
             status=status,
             output=(summary or output)[-8000:],
-            error="" if status == "completed" else _tail(output, 2000),
+            error=error,
             exit_code=result.exit_code,
             git_branch=branch_name,
             git_commit=commit_sha,
@@ -238,6 +251,41 @@ def _last_assistant_text(raw: str) -> str:
     if texts:
         return texts[-1]
     return raw.strip()
+
+
+def _error_from_events(raw: str) -> str:
+    """The first `error` event in `--format json` output, as a readable string.
+
+    OpenCode reports a failed model call as an event, and the worktree can be
+    untouched with a zero exit status: the only reliable signal that the run
+    failed is the event stream. Observed in a live deployment, where every call
+    was refused at connect time — the task was recorded as `completed` and the
+    operator saw nothing wrong.
+    """
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "error":
+            continue
+        error = event.get("error")
+        if isinstance(error, dict):
+            name = str(error.get("name") or "Error")
+            data = error.get("data")
+            message = ""
+            if isinstance(data, dict):
+                message = str(data.get("message") or data.get("error") or "")
+            elif isinstance(data, str):
+                message = data
+            return f"opencode {name}: {message}".strip()
+        if isinstance(error, str):
+            return f"opencode: {error}"
+        return "opencode reported an error"
+    return ""
 
 
 def _tail(text: str, limit: int) -> str:

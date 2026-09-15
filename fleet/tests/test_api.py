@@ -129,6 +129,46 @@ def test_task_lifecycle_is_evented(client, fake_provider, clean_db):
     assert types & {"task.completed", "task.failed"}
 
 
+def test_an_errored_agent_run_is_recorded_as_failed(client, fake_provider, clean_db):
+    """A task the agent reported an error for must not be stored as `completed`.
+
+    A control plane that reports an error as success is worse than one that
+    reports nothing: the operator reads `completed`, sees no changes, and has
+    no reason to look at the gateway.
+    """
+    client.post("/api/v1/projects", json={"name": "demo-failed-run"})
+    _wait_for(lambda: fake_provider.workspaces.get("fleet-demo-failed-run"))
+    agent_id = client.post(
+        "/api/v1/projects/demo-failed-run/agents", json={"name": "backend"}
+    ).json()["id"]
+
+    fake_provider.respond(
+        "opencode run",
+        '{"type":"error","sessionID":"ses_1","error":{"name":"UnknownError",'
+        '"data":{"message":"Unexpected server error. Check server logs for details."}}}\n',
+        exit_code=0,
+    )
+    task_id = client.post(
+        f"/api/v1/agents/{agent_id}/tasks", json={"prompt": "create FLEET_PROOF.txt"}
+    ).json()["id"]
+
+    task = _wait_for(
+        lambda: (
+            client.get(f"/api/v1/tasks/{task_id}").json()
+            if client.get(f"/api/v1/tasks/{task_id}").json()["status"]
+            in {"completed", "failed", "cancelled"}
+            else None
+        )
+    )
+    assert task["status"] == "failed"
+    assert "Unexpected server error" in task["error"]
+
+    events = client.get("/api/v1/events", params={"task": task_id, "limit": 50}).json()["items"]
+    types = {event["type"] for event in events}
+    assert "task.failed" in types
+    assert "task.completed" not in types
+
+
 def test_cancelling_a_finished_task_is_rejected(client, fake_provider, clean_db):
     client.post("/api/v1/projects", json={"name": "demo-epsilon"})
     _wait_for(lambda: fake_provider.workspaces.get("fleet-demo-epsilon"))

@@ -137,6 +137,84 @@ def test_json_event_stream_is_parsed():
     assert _last_assistant_text("plain text") == "plain text"
 
 
+def test_an_errored_run_is_a_failure_even_when_the_cli_exits_zero():
+    """The bug that shipped: an error reported as a completed task.
+
+    In the live deployment every model call was refused at connect time.
+    `opencode run` printed this event and exited 0, and the control plane
+    stored the task as `completed` — so a broken gateway looked like a
+    successful run with no changes.
+    """
+    workspaces = FakeWorkspaceProvider()
+    provider = OpenCodeProvider(workspaces)
+    workspaces.respond(
+        "git worktree add", "WORKTREE_READY /workspaces/fleet-demo/.fleet/worktrees/backend\n"
+    )
+    workspaces.respond(
+        "opencode run",
+        '{"type":"error","sessionID":"ses_x","error":{"name":"UnknownError",'
+        '"data":{"message":"Unexpected server error. Check server logs for details."}}}\n',
+        exit_code=0,
+    )
+
+    outcome = provider.execute_task(agent_spec(), task_request())
+    assert outcome.status == "failed"
+    assert "Unexpected server error" in outcome.error
+    assert "UnknownError" in outcome.error
+
+
+def test_a_run_that_exits_non_zero_is_a_failure():
+    workspaces = FakeWorkspaceProvider()
+    provider = OpenCodeProvider(workspaces)
+    workspaces.respond(
+        "git worktree add", "WORKTREE_READY /workspaces/fleet-demo/.fleet/worktrees/backend\n"
+    )
+    workspaces.respond("opencode run", "", exit_code=124)
+    outcome = provider.execute_task(agent_spec(), task_request())
+    assert outcome.status == "failed"
+    assert outcome.detail["exit_code"] == 124
+
+
+def test_the_run_keeps_opencodes_exit_status_and_leaves_a_log():
+    """The command must report opencode's status, not `tee`'s, and leave a log."""
+    workspaces = FakeWorkspaceProvider()
+    provider = OpenCodeProvider(workspaces)
+    workspaces.respond(
+        "git worktree add", "WORKTREE_READY /workspaces/fleet-demo/.fleet/worktrees/backend\n"
+    )
+    provider.execute_task(agent_spec(), task_request())
+
+    script = " ".join(" ".join(command) for _, command in workspaces.commands)
+    assert "set -o pipefail" in script
+    # The same path `get_logs` reads back, so `GET /agents/{id}/logs` is not
+    # permanently empty.
+    assert "/.fleet/tasks/tsk_test.log" in script
+
+
+def test_a_service_url_is_split_into_namespace_and_port():
+    """`<service>.<namespace>`, not the remainder of the first dot.
+
+    Reading it wrongly produced a namespaceSelector of
+    `agentforge.svc.cluster.local`, which matched nothing: the gateway rule was
+    silently absent and nothing failed loudly.
+    """
+    from fleet_core.config import get_settings
+    from fleet_core.workspaces.kubernetes_common import control_plane_parts, split_service_url
+
+    assert split_service_url(
+        "http://agentforge-llm.agentforge.svc.cluster.local:4000", default_port=4000
+    ) == ("agentforge", "agentforge-llm", 4000)
+    assert split_service_url("http://svc.ns.svc:9000", default_port=80) == ("ns", "svc", 9000)
+    assert split_service_url("http://svc.ns", default_port=80) == ("ns", "svc", 80)
+
+    # The control plane's own port comes from the URL workspaces are given, so
+    # the egress policy and that URL cannot disagree.
+    settings = get_settings(refresh=True)
+    namespace, port = control_plane_parts(settings)
+    assert namespace == settings.namespace
+    assert port == 8000
+
+
 def test_devpod_injects_credentials_by_file_not_by_argv(tmp_path, monkeypatch):
     """The credential reaches the pod, and the value never appears in `argv`.
 

@@ -23,7 +23,7 @@ import time
 from ..config import Settings, get_settings
 from . import kubernetes_common
 from .base import ExecResult, ProviderError, WorkspaceProvider, WorkspaceSpec, WorkspaceState
-from .kubernetes_common import Cluster, write_kubeconfig
+from .kubernetes_common import Cluster, control_plane_parts, write_kubeconfig
 
 log = logging.getLogger(__name__)
 
@@ -247,6 +247,7 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
         from kubernetes import client
         from kubernetes.client.exceptions import ApiException
 
+        control_ns, control_port = control_plane_parts(self.settings)
         body = client.V1NetworkPolicy(
             metadata=client.V1ObjectMeta(
                 name=names["netpol"],
@@ -276,12 +277,12 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
                             client.V1NetworkPolicyPeer(
                                 namespace_selector=client.V1LabelSelector(
                                     match_labels={
-                                        "kubernetes.io/metadata.name": self.settings.namespace
+                                        "kubernetes.io/metadata.name": control_ns
                                     }
                                 )
                             )
                         ],
-                        ports=[client.V1NetworkPolicyPort(protocol="TCP", port=8000)],
+                        ports=[client.V1NetworkPolicyPort(protocol="TCP", port=control_port)],
                     ),
                     client.V1NetworkPolicyEgressRule(
                         # Package managers, Git and model APIs. Configurable,
@@ -377,7 +378,7 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
         if self.cluster.pod_phase(reference, names["pod"]) == "NotFound":
             return ExecResult(" ".join(command), 127, stderr="workspace pod is not running")
         try:
-            output = self.cluster.exec(
+            outcome = self.cluster.exec(
                 reference,
                 names["pod"],
                 command,
@@ -386,7 +387,8 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
             )
         except Exception as exc:  # noqa: BLE001
             return ExecResult(" ".join(command), 1, stderr=f"{type(exc).__name__}: {exc}")
-        return ExecResult(" ".join(command), 0, stdout=output)
+        # The remote status, not a literal zero (see devpod.py).
+        return ExecResult(" ".join(command), outcome.exit_code, stdout=outcome.output)
 
     def get_logs(self, reference: str, *, tail: int = 200) -> str:
         names = self._names(reference)
