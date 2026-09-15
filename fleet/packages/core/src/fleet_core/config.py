@@ -52,6 +52,10 @@ class Settings:
     workspace_storage: str = "5Gi"
     workspace_storage_class: str = "local-path"
     namespace_prefix: str = "fleet-"
+    #: Ports a workspace may reach on the public internet. 80 is not optional in
+    #: practice: apt fetches from archive.ubuntu.com over HTTP, and a workspace
+    #: that cannot install a package cannot build anything.
+    workspace_egress_ports: list[int] = field(default_factory=lambda: [80, 443, 22])
 
     # LLM gateway
     llm_gateway_url: str = ""
@@ -99,6 +103,11 @@ class Settings:
             workspace_storage=os.environ.get("FLEET_WORKSPACE_STORAGE", "5Gi"),
             workspace_storage_class=os.environ.get("FLEET_WORKSPACE_STORAGE_CLASS", "local-path"),
             namespace_prefix=os.environ.get("FLEET_NAMESPACE_PREFIX", "fleet-"),
+            workspace_egress_ports=[
+                int(p)
+                for p in os.environ.get("FLEET_WORKSPACE_EGRESS_PORTS", "80,443,22").split(",")
+                if p.strip()
+            ],
             llm_gateway_url=os.environ.get("FLEET_LLM_GATEWAY_URL", ""),
             llm_gateway_key=os.environ.get("FLEET_LLM_GATEWAY_KEY", ""),
             llm_default_model=os.environ.get("FLEET_LLM_DEFAULT_MODEL", "local-coder"),

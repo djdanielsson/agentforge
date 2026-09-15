@@ -121,15 +121,19 @@ fleet -X DELETE $FLEET/api/v1/projects/demo-alpha | jq
 ### Two projects, and the isolation check
 
 ```bash
-for name in demo-alpha demo-beta; do
-  fleet -X POST $FLEET/api/v1/projects -d "{\"name\": \"$name\"}" >/dev/null
-done
-# wait for both to be ready, then:
-fleet -X PUT $FLEET/api/v1/projects/demo-alpha/credentials/github -d '{"value":"alpha-only"}' >/dev/null
-fleet -X POST $FLEET/api/v1/projects/demo-alpha/workspace/exec -d '{"command":"env | grep -c GITHUB_TOKEN"}' | jq -r .stdout
-fleet -X POST $FLEET/api/v1/projects/demo-beta/workspace/exec -d '{"command":"env | grep -c GITHUB_TOKEN"}' | jq -r .stdout
-# alpha sees 1, beta sees 0: credentials are project-scoped (SPEC §15, §38)
+# one project with a credential, one without
+fleet -X POST $FLEET/api/v1/projects -d '{"name": "demo-alpha",
+  "credentials": [{"name": "github", "value": "alpha-only"}]}' >/dev/null
+fleet -X POST $FLEET/api/v1/projects -d '{"name": "demo-beta"}' >/dev/null
+# wait until both workspaces are ready (see the earlier curl examples), then:
+fleet -X POST $FLEET/api/v1/projects/demo-alpha/workspace/exec -d '{"command": "ls -l /workspaces/demo-alpha-ns/.fleet/credentials.env"}' | jq -r .stdout
+fleet -X POST $FLEET/api/v1/projects/demo-beta/workspace/exec  -d '{"command": "ls /workspaces/demo-beta-ns/.fleet/credentials.env 2>&1"}' | jq -r .stdout
 ```
+
+Alpha has a credentials file, beta has none, and neither namespace can list the
+other's: each project gets its own namespace, PVC and ServiceAccount identity
+(SPEC §18, §38). Project credentials are written into the owning project's own
+workspace volume and nowhere else, and the API never returns their values.
 
 ## The API
 
@@ -243,7 +247,10 @@ single place to change them. The ones worth knowing:
   provider.)
 - **Credentials are project-scoped and never returned.** The API returns names,
   Secret references and environment-variable names; values live in Kubernetes
-  Secrets and are copied only into the owning project's namespace.
+  Secrets and are copied only into the owning project's namespace. A workspace
+  receives them as a `0600` `.fleet/credentials.env` in its own volume, written
+  over the exec stream's stdin so the value never appears in a command line, and
+  the agent's run command sources it.
 - **Agents never hold a model-provider credential.** They hold a project-scoped
   token for the fleet proxy, which is the only thing that knows the gateway key.
 

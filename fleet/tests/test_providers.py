@@ -240,6 +240,10 @@ def test_credentials_are_written_into_the_workspace_over_stdin(tmp_path, monkeyp
     # The value travels on stdin, not in the command the API server records.
     assert "a-secret-value" not in script
     assert captured["stdin"] == "GITHUB_TOKEN=a-secret-value\n"
+    # A fixed byte count, not `cat`: the exec stream has no EOF, so a command
+    # that waits for one hangs until the exec times out.
+    assert "head -c " in script
+    assert "cat >" not in script
 
 
 def test_a_project_without_credentials_writes_nothing(tmp_path, monkeypatch):

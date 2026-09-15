@@ -189,12 +189,23 @@ class DevPodKubernetesProvider(WorkspaceProvider):
             return False
         home = f"/workspaces/{spec.reference}/.fleet"
         path = f"{home}/credentials.env"
+        payload = "".join(f"{k}={v}\n" for k, v in values.items())
         # `umask` before the redirect, and the values on stdin rather than in the
-        # command: the exec API records the command it is given.
+        # command, because the exec API records the command it is given.
+        #
+        # `head -c <bytes>` and not `cat`: the exec stream has no end-of-input
+        # signal, so a `cat` waits for an EOF that never arrives and the write
+        # hangs until the exec times out. Reading an exact byte count lets the
+        # remote command finish on its own.
         result = self.execute(
             spec.reference,
-            ["bash", "-lc", f"umask 077; mkdir -p {home}; cat > {path}; chmod 600 {path}"],
-            stdin_data="".join(f"{k}={v}\n" for k, v in values.items()),
+            [
+                "bash",
+                "-lc",
+                f"umask 077; mkdir -p {home}; "
+                f"head -c {len(payload.encode())} > {path}; chmod 600 {path}",
+            ],
+            stdin_data=payload,
         )
         if not result.ok:
             log.warning(
@@ -487,9 +498,12 @@ class DevPodKubernetesProvider(WorkspaceProvider):
                         ports=[client.V1NetworkPolicyPort(protocol="TCP", port=8000)],
                     ),
                     client.V1NetworkPolicyEgressRule(
+                        # Package managers, Git and model APIs. Configurable,
+                        # because "which the workspace can reach" is project
+                        # policy, not a constant.
                         ports=[
-                            client.V1NetworkPolicyPort(protocol="TCP", port=443),
-                            client.V1NetworkPolicyPort(protocol="TCP", port=22),
+                            client.V1NetworkPolicyPort(protocol="TCP", port=port)
+                            for port in self.settings.workspace_egress_ports
                         ]
                     ),
                 ],

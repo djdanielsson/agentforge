@@ -284,9 +284,12 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
                         ports=[client.V1NetworkPolicyPort(protocol="TCP", port=8000)],
                     ),
                     client.V1NetworkPolicyEgressRule(
+                        # Package managers, Git and model APIs. Configurable,
+                        # because "which the workspace can reach" is project
+                        # policy, not a constant.
                         ports=[
-                            client.V1NetworkPolicyPort(protocol="TCP", port=443),
-                            client.V1NetworkPolicyPort(protocol="TCP", port=22),
+                            client.V1NetworkPolicyPort(protocol="TCP", port=port)
+                            for port in self.settings.workspace_egress_ports
                         ]
                     ),
                 ],

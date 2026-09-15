@@ -32,6 +32,10 @@ DEVPOD_POD_LABEL = "devpod.sh/created"
 #: How long to wait for a deleted namespace to finish terminating.
 NAMESPACE_TERMINATE_TIMEOUT = 180
 
+#: Ceiling on one exec into a workspace. The stream has no EOF signal, so the
+#: only way to bound a command is by time.
+EXEC_TIMEOUT = 120
+
 
 def load_client() -> client.ApiClient:
     """In-cluster service account, or a kubeconfig. Never a silent fallback."""
@@ -155,12 +159,25 @@ class Cluster:
         deadline = time.monotonic() + NAMESPACE_TERMINATE_TIMEOUT
         while time.monotonic() < deadline:
             if not self.namespace_terminating(name):
-                return
+                break
             time.sleep(2)
-        raise ProviderError(
-            f"namespace {name} is still terminating after "
-            f"{NAMESPACE_TERMINATE_TIMEOUT}s; delete the project or try again"
-        )
+        else:
+            raise ProviderError(
+                f"namespace {name} is still terminating after "
+                f"{NAMESPACE_TERMINATE_TIMEOUT}s; delete the project or try again"
+            )
+
+        # The namespace is gone now, so it still has to be created: returning
+        # here without creating left the project with no boundary at all, and
+        # the credential copy then failed with a 404 for a namespace that never
+        # existed.
+        try:
+            self.core.create_namespace(
+                client.V1Namespace(metadata=client.V1ObjectMeta(name=name, labels=labels))
+            )
+        except ApiException as exc:
+            if exc.status != 409:
+                raise
 
     def find_pod(self, namespace: str, label_selector: str) -> str:
         from kubernetes.client.exceptions import ApiException
@@ -221,6 +238,7 @@ class Cluster:
         *,
         container: str | None = None,
         stdin_data: str | None = None,
+        timeout: int = EXEC_TIMEOUT,
     ) -> str:
         """Run a command and return its combined output.
 
@@ -258,13 +276,20 @@ class Cluster:
         )
         handle.write_stdin(stdin_data)
         chunks: list[str] = []
-        while handle.is_open():
+        # A deadline, because the stream has no end-of-input signal: a remote
+        # command that waits for EOF waits forever, and an unbounded loop here
+        # hung a provisioning thread with no error anywhere.
+        deadline = time.monotonic() + timeout
+        while handle.is_open() and time.monotonic() < deadline:
             handle.update(timeout=1)
             if handle.peek_stdout():
                 chunks.append(handle.read_stdout())
             if handle.peek_stderr():
                 chunks.append(handle.read_stderr())
+        timed_out = handle.is_open()
         handle.close()
+        if timed_out:
+            chunks.append(f"\n<fleet: exec timed out after {timeout}s>")
         return "".join(chunks)
 
     def apply_service(
