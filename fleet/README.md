@@ -297,11 +297,14 @@ provider interface is real (SPEC §6).
 ### Deploy
 
 ```bash
-# 1. build both images in-cluster (Kaniko → registry.registry.svc:5000)
+# 1. build the images in-cluster (Kaniko → registry.registry.svc:5000).
+#    Kaniko clones the branch, so commit and push first.
 python3 fleet/deploy/build.py fleet <git-sha>
 
-# 2. render the chart and apply it (needs a helm binary; there is none in-cluster)
-python3 fleet/deploy/deploy.py --tag <git-sha>
+# 2. render the chart and apply it (needs a helm binary and PyYAML; there is
+#    neither in-cluster, so this runs from the venv), and leave an existing
+#    Ingress alone unless you mean to re-issue its certificate
+./fleet/.venv/bin/python fleet/deploy/deploy.py --tag <git-sha>
 ```
 
 `deploy.py` copies the LiteLLM master key from `agentforge/agentforge-llm` into
@@ -333,7 +336,13 @@ single place to change them. The ones worth knowing:
 
 ## Security posture
 
-- **Projects are isolated by namespace.** Each project gets its own namespace, a
+- **Isolation is a property of the provider, not the platform.** A `devpod` or
+  `kubernetes` workspace is its own namespace with a PVC, a Service and a
+  default-deny NetworkPolicy; a `checkout` workspace is a directory in the shared
+  T3 environment and has none of that. `GET /api/v1/providers` reports what each
+  provider actually does, `workspace.provider` picks one per project, and the
+  choice is visible on the project rather than implied by the deployment.
+- **Projects that use DevPod are isolated by namespace.** Each project gets its own namespace, a
   PVC, a Service and a default-deny NetworkPolicy. Egress is limited to DNS, the
   control plane's proxy and the gateway, plus 443/22 for Git and package
   registries.
@@ -351,6 +360,10 @@ single place to change them. The ones worth knowing:
   the agent's run command sources it.
 - **Agents never hold a model-provider credential.** They hold a project-scoped
   token for the fleet proxy, which is the only thing that knows the gateway key.
+  In a shared environment that token is passed in the run's environment and
+  referenced as `{env:FLEET_LLM_TOKEN}` from the config, never written to a file:
+  every project in one environment runs as the same user, so a token on disk is a
+  token every other project's agent can read.
 - **An agent runs as an unprivileged user, not as root.** The control plane's
   exec always lands as root (it has to: the bootstrap needs `apt-get`), so the
   run itself drops privileges to `FLEET_WORKSPACE_AGENT_USER` (`vscode`) —

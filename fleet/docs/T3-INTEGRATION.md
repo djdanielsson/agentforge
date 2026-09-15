@@ -206,16 +206,37 @@ agent layer, different meaning of "workspace":
 Two things had to stop being assumptions for the API to stay provider-agnostic:
 
 * `WorkspaceProvider.layout(reference)` — where a provider keeps a workspace's
-  files and its tools. The opencode agent provider now asks for it instead of
-  hard-coding `/workspaces/<ref>/.fleet`.
+  files and its tools: the root, the fleet home, the *repository*, the worktrees,
+  the task logs and the toolchain directory. The opencode agent provider now asks
+  for it instead of hard-coding `/workspaces/<ref>/.fleet`.
 * `service._reference(settings, slug, provider)` — the reference follows the
   provider, because a checkout's is a directory name and a DevPod workspace's is
   a namespace.
+
+The two layouts, as the provider reports them:
+
+| | `devpod` | `checkout` |
+| --- | --- | --- |
+| root | `/workspaces/<ref>` | `/projects/<name>` |
+| repository | `<root>/.fleet/repo` | `<root>` — the checkout *is* the repo |
+| fleet home | `<root>/.fleet` | `/projects/<name>/.fleet` |
+| worktrees | `<fleet_home>/worktrees` | `/projects/.fleet/<name>/worktrees` |
+| tools | `<fleet_home>/tools/bin` | `/usr/local/bin` (in the image) |
+
+Worktrees are outside the checkout on purpose. Nested inside it they appear in
+the checkout's own `git status`, and `git add -A` there stages another agent's
+worktree as an embedded repository (measured against git 2.47) — one agent's
+commit recording another agent's tree. `destroy` removes both.
 
 A reference is validated as `^[a-z0-9][a-z0-9-]{0,62}$` before it is used, because
 this provider is the last thing between a stored value and `rm -rf` on a shared
 volume. `stop` raises rather than pretending: there is no per-project pod to stop,
 and saying so beats a green status that means nothing.
+
+Credentials are read from the control plane's own namespace, not copied into a
+workspace namespace — that copy is a Kubernetes-provider idea and there is no
+namespace here to copy into. `WorkspaceProvider.credentials_in_namespace` is the
+seam: DevPod says yes, checkout says no, and the service layer does not decide.
 
 ## What a T3 session sees
 
@@ -274,39 +295,37 @@ clean URL so the token is not left in `.git/config`.
 
 ## What was verified, and what was not
 
-Verified against the running deployment — commands and outputs are in the commit
-that added this section:
+Against the running deployment (namespace `fleet`, image tag = the commit this
+section was written at):
 
-* T3 serves headlessly in the cluster: `T3 Code server is ready`, listening on
-  `0.0.0.0:5733`, `GET / -> 200`, and it prints its pairing details.
-* A project created with `workspace.provider: "checkout"` is cloned into
-  `/projects/<name>`, registered with `t3 project add`, and appears in the
-  environment's own `/api/orchestration/snapshot` with the same workspace root.
-* `POST /mcp` answers the initialize handshake, lists the eight tools and runs
-  `tools/call list_projects` against the real control plane.
-* `opencode mcp list` inside the environment reports the fleet server as connected
-  (the client is the same binary the environment ships).
-* The DevPod path is unchanged: the provider list still reports devpod as
-  configured and available, existing projects and their workspaces are untouched,
-  and ingress `cp` kept its certificate through the deploy.
+| what | evidence |
+| --- | --- |
+| T3 serves headlessly in the cluster | pod log: `T3 Code server is ready` + `Listening on http://0.0.0.0:5733`; `GET / -> 200` from inside the pod |
+| a checkout project provisioned | `POST /api/v1/projects` with `workspace.provider: checkout` → workspace `ready`, `create_output`: `CLONE_OK / BRANCH=fleet / T3_REGISTERED` |
+| the checkout is a real clone of the private repo | `git log --oneline` inside the pod shows the branch's commits; `git remote get-url origin` is the clean URL, and `grep -c x-access-token .git/config` is 0 |
+| the project is visible to T3 | `GET /api/orchestration/snapshot` on the environment's own server lists it with `workspaceRoot: /projects/checkout-alpha` |
+| the MCP server is reachable to the CLI the environment ships | `opencode mcp list` inside the pod: `✓ fleet connected  http://fleet-api.fleet.svc.cluster.local:8000/mcp` |
+| the MCP tools work over the real deployment | `initialize` → `{name: fleet-control-plane}`; `tools/list` → the eight tools; `tools/call workspace_status` → the project's workspace |
+| an agent runs in a checkout workspace | a task on an `opencode` agent: `completed`, git branch + commit recorded, usage attributed (`2 calls, 2586 prompt tokens`) in `GET /projects/checkout-alpha/usage` |
+| DevPod is untouched | `GET /api/v1/providers` still reports `devpod` configured and available; the existing projects and workspaces are unchanged; the tailscale proxy for ingress `cp` (`ts-cp-wnwwc-0`) was never restarted (age predates this work, 0 restarts) |
 
 Not verified, and not claimed:
 
-* **An agent session driven from the T3 UI end to end.** Pairing needs a browser
-  on the tailnet, which this work does not have: the handshake, the tool list, the
-  client's acceptance of the endpoint, and the project registration were each
-  verified directly, but no message was typed into the T3 chat and no tool call
-  was made from inside a T3 session. A fleet task in a checkout workspace *was*
-  submitted and run through the control plane's own path (same as DevPod).
-* **A successful clone of the private test repository.** Network, DNS and HTTPS to
-  github.com work from the pod, but the test project had no credential and the
-  clone correctly failed with `could not read Username for 'https://github.com'`.
-  The credential path is exercised by code and unit tests, not by a live clone.
+* **A message typed into the T3 UI, driving fleet through the MCP tools.** Pairing
+  needs a browser on the tailnet and this work does not have one. Every layer was
+  verified separately — the handshake, the tool list, `opencode mcp list`
+  connected, the project registered in the server the UI reads — but no session
+  in the UI has called `submit_task`.
 * **T3's own chat model.** A session in T3 gets the fleet *tools* from this work;
-  which model T3's chat uses is T3's own provider configuration, and nothing here
-  configures it.
+  which model its chat uses is T3's own provider configuration, and nothing here
+  sets it.
+* **An agent writing files in a checkout.** The task above completed and was
+  attributed, but its answer was tool-call JSON in the message text rather than a
+  tool call — the known limitation of the local model behind the `localOnly`
+  policy (see the README). That is the model, not the checkout: the same is true
+  of a DevPod workspace.
 
-## Two traps worth keeping
+## Three traps found by running it
 
 **A Service in this namespace rewrites your environment.** Kubernetes injects
 `<SERVICENAME>_PORT=tcp://<cluster-ip>:<port>` into *every* pod in the namespace
@@ -324,6 +343,22 @@ Proven with a one-shot probe Job in the namespace. The T3 pod sets
 `enableServiceLinks: false` and the entrypoint passes its port literally; a
 rename would not have been a fix, because the injection is keyed on the Service
 name, not on the variable being read.
+
+**A single-quoted `sed` does not expand a token, and the failure is silent.**
+The clone builds its URL from the credential; the first version did it with
+`sed -E 's#^https://#https://x-access-token:${GITHUB_TOKEN}@#'`, whose *program*
+is single-quoted, so the shell never substituted anything and GitHub answered
+`fatal: Authentication failed`. It is built by parameter expansion now —
+`"https://x-access-token:${GITHUB_TOKEN}@${repo_url#https://}"` — which cannot be
+quoted wrong.
+
+**`git clone` refuses a non-empty destination, and the destination is non-empty
+by design.** `.fleet/credentials.env` has to exist *before* the clone, because
+the clone is authenticated with the token in it. Live provisioning failed on
+`fatal: destination path '/projects/checkout-alpha' already exists and is not an
+empty directory`; the clone now goes to a scratch directory and is copied in.
+
+## And one decision worth keeping
 
 **An MCP endpoint is a path in someone else's config.** `/mcp` is served at the
 root, not under `/api/v1`, because the URL is written into every checkout's
