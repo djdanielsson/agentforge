@@ -161,20 +161,22 @@ class CheckoutWorkspaceProvider(WorkspaceProvider):
             )
 
         state = self.status(slug)
-        state.detail["create_output"] = (result.stdout or "")[-1000:]
-        state.detail["project_id"] = _marker(result.stdout, "T3_PROJECT_ID")
-        state.detail["branch"] = _marker(result.stdout, "BRANCH")
-        if not state.ready:
-            # "Not ready yet" and "the registration never happened" are
-            # different states, and only one of them is worth waiting for.
-            if "T3_REGISTERED" not in (result.stdout or ""):
-                state.status = "failed"
-                state.error = (
-                    (result.stdout or result.stderr)[-2000:]
-                    or "t3 project add did not report the project as registered"
-                )
-            else:
-                state.status = "provisioning"
+        output = result.stdout or ""
+        state.detail["create_output"] = output[-1500:]
+        state.detail["project_id"] = _marker(output, "T3_PROJECT_ID")
+        state.detail["branch"] = _marker(output, "BRANCH")
+        # "Not ready yet" and "it failed" are different states, and only one of
+        # them is worth waiting for. git's own message is the diagnosis.
+        failure = ""
+        if "CLONE_FAILED" in output:
+            failure = _marker(output, "CLONE_ERROR") or "git clone failed"
+        elif "T3_REGISTER_FAILED" in output:
+            failure = "t3 project add did not register the checkout"
+        if failure:
+            state.status = "failed"
+            state.error = failure
+        elif not state.ready:
+            state.status = "provisioning"
         return state
 
     def start(self, reference: str) -> WorkspaceState:
@@ -350,54 +352,58 @@ class CheckoutWorkspaceProvider(WorkspaceProvider):
         """Clone or init the checkout, then hand it to T3, printing markers.
 
         The markers exist so the control plane records what *happened* rather
-        than what was intended — the previous provider's silence is how a task
-        that never reached a model got recorded as complete.
+        than what was intended — silence is how a task that never reached a
+        model got recorded as complete (FINDINGS §9.14), and how a checkout that
+        never cloned reads as one that is still working.
+
+        A clone failure keeps git's own message. A private repository with no
+        project credential fails exactly here, and "the workspace is
+        provisioning" is not a diagnosis an operator can act on.
         """
-        credentials = f"{layout.fleet_home}/credentials.env"
-        clone = (
-            f"if [ ! -d {shlex.quote(layout.root + '/.git')} ]; then "
-            f"if [ -n {shlex.quote(spec.repository_url)} ]; then "
-            f"url={shlex.quote(spec.repository_url)}; "
-            f'[ -f {shlex.quote(credentials)} ] && . {shlex.quote(credentials)}; '
-            'if [ -n "${GITHUB_TOKEN:-}" ]; then '
-            "url=$(printf '%s' \"$url\" | sed -E "
-            '"s#^https://#https://x-access-token:${GITHUB_TOKEN}@#"); fi; '
-            f"if git clone --branch {shlex.quote(spec.repository_branch or 'main')} "
-            f'"$url" {shlex.quote(layout.root)} >/dev/null 2>&1; then '
-            f"echo CLONE_OK; else echo CLONE_FAILED; fi; "
-            f"git -C {shlex.quote(layout.root)} remote set-url origin "
-            f"{shlex.quote(spec.repository_url)} 2>/dev/null || true; "
-            "else "
-            f"git init -q {shlex.quote(layout.root)}; "
-            f"git -C {shlex.quote(layout.root)} -c user.email=fleet@localhost "
-            "-c user.name=fleet commit -q --allow-empty -m 'fleet: empty checkout'; "
-            "echo CLONE_EMPTY; fi; "
-            "else echo CHECKOUT_EXISTS; fi"
-        )
-        # The agent works in this directory as the unprivileged user, and T3
-        # runs its own edits there too, so the checkout belongs to that user.
+        root = shlex.quote(layout.root)
+        home = shlex.quote(layout.fleet_home)
+        credentials = shlex.quote(f"{layout.fleet_home}/credentials.env")
+        url = shlex.quote(spec.repository_url)
+        branch = shlex.quote(spec.repository_branch or "main")
         agent_user = shlex.quote(self.settings.workspace_agent_user)
-        ownership = (
-            f'if id -u {agent_user} >/dev/null 2>&1; then '
-            f"chown -R {agent_user}:{agent_user} {shlex.quote(layout.root)} "
-            "2>/dev/null || true; fi; "
-            f"git config --global --add safe.directory '*' >/dev/null 2>&1 || true; "
-            f"git -C {shlex.quote(layout.root)} config user.email fleet@localhost; "
-            f"git -C {shlex.quote(layout.root)} config user.name fleet"
-        )
-        return "\n".join(
-            [
-                "set -u",
-                "export PATH=/usr/local/bin:$PATH",
-                f"mkdir -p {shlex.quote(self.settings.t3_projects_dir)}",
-                f"mkdir -p {shlex.quote(layout.fleet_home)}",
-                clone,
-                ownership,
-                f"echo BRANCH=$(git -C {shlex.quote(layout.root)} rev-parse --abbrev-ref HEAD "
-                "2>/dev/null || echo none)",
-                self._register_script(slug),
-            ]
-        )
+        return f"""set -u
+export PATH=/usr/local/bin:$PATH
+mkdir -p {shlex.quote(self.settings.t3_projects_dir)} {home}
+if [ -d {root}/.git ]; then
+  echo CHECKOUT_EXISTS
+elif [ -n {url} ]; then
+  repo_url={url}
+  [ -f {credentials} ] && . {credentials}
+  if [ -n "${{GITHUB_TOKEN:-}}" ]; then
+    repo_url=$(printf '%s' "$repo_url" | \
+      sed -E 's#^https://#https://x-access-token:${{GITHUB_TOKEN}}@#')
+  fi
+  if clone_out=$(git clone --branch {branch} "$repo_url" {root} 2>&1); then
+    echo CLONE_OK
+  else
+    # `sed` masks the token so a retry's log cannot leak it.
+    echo "CLONE_ERROR=$(printf '%s' "$clone_out" | \
+      sed -E 's#x-access-token:[^@]*@#x-access-token:***@#g' | tail -n 1)"
+    echo CLONE_FAILED
+  fi
+  git -C {root} remote set-url origin {url} 2>/dev/null || true
+else
+  git init -q {root}
+  git -C {root} -c user.email=fleet@localhost -c user.name=fleet commit -q --allow-empty -m 'fleet: empty checkout'
+  echo CLONE_EMPTY
+fi
+if id -u {agent_user} >/dev/null 2>&1; then
+  chown -R {agent_user}:{agent_user} {root} 2>/dev/null || true
+fi
+git config --global --add safe.directory '*' >/dev/null 2>&1 || true
+if [ -d {root}/.git ]; then
+  git -C {root} config user.email fleet@localhost
+  git -C {root} config user.name fleet
+  echo "BRANCH=$(git -C {root} rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)"
+else
+  echo BRANCH=none
+fi
+{self._register_script(slug)}"""
 
     def _register_script(self, slug: str) -> str:
         """Make the directory a project in T3, and prove it took.

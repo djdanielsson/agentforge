@@ -61,7 +61,11 @@ class FakeT3Environment:
         output = ""
         if "git clone" in script or "git init" in script:
             if self.clone_fails:
-                output += "CLONE_FAILED\n"
+                # A private repository with no project credential, verbatim.
+                output += (
+                    "CLONE_ERROR=fatal: could not read Username for "
+                    "'https://github.com': No such device or address\nCLONE_FAILED\n"
+                )
             else:
                 self.checkouts.add(slug)
                 output += "CLONE_OK\n"
@@ -142,7 +146,8 @@ def test_create_fails_loudly_when_the_checkout_cannot_be_made(no_real_cluster): 
     state = provider.create(_spec())
     assert not state.ready
     assert state.status == "failed"
-    assert "T3_REGISTER" in state.error
+    # The operator gets git's message, not "still provisioning".
+    assert "could not read Username" in state.error
 
 
 def test_the_opencode_config_carries_the_gateway_and_the_fleet_mcp_server(no_real_cluster):  # noqa: ARG001
