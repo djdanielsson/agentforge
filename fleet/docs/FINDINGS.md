@@ -611,3 +611,59 @@ Two things a reader should not mistake for success:
   title and any retry, which is why one task is 2 calls and ~2.6k prompt tokens
   rather than one.
 
+---
+
+## 11. A tool-capable model closes the last mile — verified
+
+§10 records that a task runs but the worktree is unchanged, and attributes that to
+the local model. That diagnosis is right, and it is worth being precise about what
+it does and does not mean: the control plane is not the limitation, *the model is*.
+
+Same project shape, same agent provider, one variable changed — the agent's model,
+from `local-coder` (Ollama `qwen2.5-coder:7b`) to `smart` (`deepseek-v4.1-flash`
+through the gateway), with the project's `llmPolicy` set to `cloudAllowed` so the
+policy allows it:
+
+```
+POST /api/v1/projects/demo-cloud/agents {"name":"backend","provider":"opencode","model":"smart"}
+POST /api/v1/agents/agt_b3bcb9dee363/tasks
+     {"prompt":"Create a file named PROOF.txt at the root of the git repository
+                containing exactly: verified\nThen commit it with the message
+                'proof'. Do nothing else."}
+     -> 202 tsk_18296f291f7b
+GET  /api/v1/tasks/tsk_18296f291f7b
+     -> status: completed, result: "Done.", git_commit: a964cb9edf, ~30s
+```
+
+and inside the workspace, which is the part that matters:
+
+```
+$ cd /workspaces/fleet-demo-cloud/.fleet/repo && git worktree list
+/workspaces/fleet-demo-cloud/.fleet/repo               cd6062d [fleet]
+/workspaces/fleet-demo-cloud/.fleet/worktrees/backend  a964cb9 [backend]
+
+$ cat /workspaces/fleet-demo-cloud/.fleet/worktrees/backend/PROOF.txt
+verified
+
+$ git show --stat --oneline a964cb9edf
+a964cb9 proof
+ PROOF.txt | 1 +
+ 1 file changed, 1 insertion(+)
+```
+
+So the whole chain is proven end to end: project → DevPod workspace → agent →
+task → the control plane's LLM proxy → LiteLLM → a model that calls tools → a file
+written → a commit made, in the agent's own worktree on its own branch, with
+`GET /api/v1/projects/demo-cloud/usage` answering `by_agent: {backend, calls: 6,
+prompt_tokens: 12003}` and `by_model: {smart, calls: 6}`.
+
+Two things this changes for a reader of §10:
+
+- **Pick the model for the job.** A local model that returns tool calls as text
+  produces a task that "completes" and changes nothing; a tool-capable one does
+  the work. The control plane reports both faithfully — it is the model that
+  differs, and `localOnly` projects can only use the former.
+- **Look for the work in the worktree.** The repository checkout at
+  `.fleet/repo` is not where an agent writes; each agent works in
+  `.fleet/worktrees/<agent>` on its own branch, which is what keeps concurrent
+  agents from corrupting each other's work (SPEC §25).
