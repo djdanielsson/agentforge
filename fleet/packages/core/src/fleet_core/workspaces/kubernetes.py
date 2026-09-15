@@ -21,6 +21,7 @@ import logging
 import time
 
 from ..config import Settings, get_settings
+from . import kubernetes_common
 from .base import ExecResult, ProviderError, WorkspaceProvider, WorkspaceSpec, WorkspaceState
 from .kubernetes_common import Cluster, write_kubeconfig
 
@@ -41,7 +42,7 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
     @property
     def cluster(self) -> Cluster:
         if self._cluster is None:
-            self._cluster = Cluster()
+            self._cluster = kubernetes_common.get_cluster()
         return self._cluster
 
     # --- naming -----------------------------------------------------------
@@ -106,7 +107,9 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
                 raise
 
         role = client.V1Role(
-            metadata=client.V1ObjectMeta(name=names["role"], namespace=spec.reference, labels=labels),
+            metadata=client.V1ObjectMeta(
+                name=names["role"], namespace=spec.reference, labels=labels
+            ),
             # Deliberately almost empty: a workspace has no business reading
             # Kubernetes state, not even its own namespace's.
             rules=[
@@ -365,7 +368,9 @@ class KubernetesWorkspaceProvider(WorkspaceProvider):
         if self.cluster.pod_phase(reference, names["pod"]) == "NotFound":
             return ExecResult(" ".join(command), 127, stderr="workspace pod is not running")
         try:
-            output = self.cluster.exec(reference, names["pod"], command, container=container or CONTAINER)
+            output = self.cluster.exec(
+                reference, names["pod"], command, container=container or CONTAINER
+            )
         except Exception as exc:  # noqa: BLE001
             return ExecResult(" ".join(command), 1, stderr=f"{type(exc).__name__}: {exc}")
         return ExecResult(" ".join(command), 0, stdout=output)

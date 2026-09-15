@@ -61,7 +61,6 @@ def apply(body: dict) -> str:
         "Service": "services",
         "Ingress": "ingresses",
         "Secret": "secrets",
-        "ClusterRoleBinding": "clusterrolebindings",
         "ConfigMap": "configmaps",
         "NetworkPolicy": "networkpolicies",
     }[kind]
@@ -131,7 +130,7 @@ def ensure_namespace() -> None:
                 "labels": {"app.kubernetes.io/managed-by": "fleet-deploy"},
             },
         },
-    ) if "__error__" in req(f"/api/v1/namespaces/{NAMESPACE}") else None
+    ) if "__error__" in req(f"/api/v1/namespaces/{NAMESPACE}") else None  # noqa: E501
     print(f"  namespace {NAMESPACE} present")
 
 
@@ -153,12 +152,13 @@ def copy_gateway_key() -> None:
         "data": {"LITELLM_MASTER_KEY": encoded},
     }
     apply(body)
-    print(f"  secret fleet-llm present (key length {len(base64.b64decode(encoded))}, value not shown)")
+    print(
+        f"  secret fleet-llm present (key length {len(base64.b64decode(encoded))}, value not shown)"
+    )
 
 
 def ensure_api_secret(token: str) -> None:
     import hashlib
-    import secrets
 
     body = {
         "apiVersion": "v1",
@@ -184,7 +184,9 @@ def wait_rollout(timeout: int = 180) -> str:
         deployment = req(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/fleet-api")
         if "__error__" not in deployment:
             status = deployment.get("status", {})
-            if status.get("readyReplicas") and status.get("readyReplicas") == status.get("replicas"):
+            if status.get("readyReplicas") and status.get("readyReplicas") == status.get(
+                "replicas"
+            ):
                 return "ready"
             if status.get("unavailableReplicas") and status.get("conditions"):
                 for condition in status["conditions"]:
@@ -203,7 +205,11 @@ def main() -> int:
     parser.add_argument("--token", default="")
     args = parser.parse_args()
 
-    token = args.token or open(Path("/opt/data/work/.fleet-api-token")).read().strip()
+    if args.token:
+        token = args.token
+    else:
+        with open(Path("/opt/data/work/.fleet-api-token")) as handle:
+            token = handle.read().strip()
 
     print("== namespace and secrets ==")
     ensure_namespace()

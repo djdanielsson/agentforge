@@ -24,7 +24,7 @@ from .db import session_scope
 from .events import publish_sync
 from .llm import project_token
 from .models import Agent, Credential, Project, Task, Workspace
-from .secrets import copy_secret, delete_secret, secret_keys, secret_present, upsert_secret
+from .secrets import copy_secret, secret_keys, secret_present, upsert_secret
 from .workspaces import SecretRef, WorkspaceSpec, get_workspace_provider
 from .workspaces.definition import render_definition
 
@@ -80,9 +80,15 @@ def get_agent(session, project_id: str, name_or_id: str) -> Agent:
 
 
 def primary_workspace(session, project_id: str) -> Workspace:
-    workspace = session.execute(
-        select(Workspace).where(Workspace.project_id == project_id).order_by(Workspace.created_at)
-    ).scalars().first()
+    workspace = (
+        session.execute(
+            select(Workspace)
+            .where(Workspace.project_id == project_id)
+            .order_by(Workspace.created_at)
+        )
+        .scalars()
+        .first()
+    )
     if workspace is None:
         raise NotFound(f"project {project_id} has no workspace")
     return workspace
@@ -99,9 +105,7 @@ def create_project(payload: dict[str, Any], *, provision: bool = True) -> dict[s
     slug = slugify(name)
 
     with session_scope() as session:
-        existing = session.execute(
-            select(Project).where(Project.name == name)
-        ).scalar_one_or_none()
+        existing = session.execute(select(Project).where(Project.name == name)).scalar_one_or_none()
         if existing is not None:
             raise Conflict(f"project {name!r} already exists")
 
@@ -168,15 +172,15 @@ def create_project(payload: dict[str, Any], *, provision: bool = True) -> dict[s
 
 
 def _project_detail(session, project: Project) -> dict[str, Any]:
-    workspaces = session.execute(
-        select(Workspace).where(Workspace.project_id == project.id)
-    ).scalars().all()
-    agents = session.execute(
-        select(Agent).where(Agent.project_id == project.id)
-    ).scalars().all()
-    credentials = session.execute(
-        select(Credential).where(Credential.project_id == project.id)
-    ).scalars().all()
+    workspaces = (
+        session.execute(select(Workspace).where(Workspace.project_id == project.id)).scalars().all()
+    )
+    agents = session.execute(select(Agent).where(Agent.project_id == project.id)).scalars().all()
+    credentials = (
+        session.execute(select(Credential).where(Credential.project_id == project.id))
+        .scalars()
+        .all()
+    )
     return {
         "id": project.id,
         "name": project.name,
@@ -261,9 +265,11 @@ def delete_project(name_or_id: str) -> None:
     settings = get_settings()
     with session_scope() as session:
         project = get_project(session, name_or_id)
-        reference = session.execute(
-            select(Workspace.reference).where(Workspace.project_id == project.id)
-        ).scalars().first()
+        reference = (
+            session.execute(select(Workspace.reference).where(Workspace.project_id == project.id))
+            .scalars()
+            .first()
+        )
         project_id, project_name = project.id, project.name
         for model in (Task, Agent, Workspace, Credential):
             session.query(model).filter(model.project_id == project.id).delete()
@@ -281,7 +287,9 @@ def delete_project(name_or_id: str) -> None:
                 project_id=project_id,
                 payload={"reference": reference},
             )
-    publish_sync("project.deleted", message=f"project {project_name} deleted", project_id=project_id)
+    publish_sync(
+        "project.deleted", message=f"project {project_name} deleted", project_id=project_id
+    )
 
 
 # --- workspaces --------------------------------------------------------------
@@ -289,9 +297,11 @@ def delete_project(name_or_id: str) -> None:
 
 def _spec_for(session, project: Project, workspace: Workspace, settings: Settings) -> WorkspaceSpec:
     """Build the provider spec for a project's workspace."""
-    credentials = session.execute(
-        select(Credential).where(Credential.project_id == project.id)
-    ).scalars().all()
+    credentials = (
+        session.execute(select(Credential).where(Credential.project_id == project.id))
+        .scalars()
+        .all()
+    )
     slug = slugify(project.name)
 
     secret_refs: list[SecretRef] = []
@@ -390,11 +400,15 @@ def provision_workspace(project_id: str, *, force: bool = False) -> dict[str, An
         return _workspace_by_id(workspace_id)
 
 
-def _project_credentials_into_namespace(settings: Settings, project_id: str, reference: str) -> None:
+def _project_credentials_into_namespace(
+    settings: Settings, project_id: str, reference: str
+) -> None:
     with session_scope() as session:
-        credentials = session.execute(
-            select(Credential).where(Credential.project_id == project_id)
-        ).scalars().all()
+        credentials = (
+            session.execute(select(Credential).where(Credential.project_id == project_id))
+            .scalars()
+            .all()
+        )
         names = {c.secret_name for c in credentials}
     for name in names:
         if secret_present(settings.namespace, name):
@@ -521,9 +535,11 @@ def credential_status(project_name_or_id: str) -> list[dict[str, Any]]:
     settings = get_settings()
     with session_scope() as session:
         project = get_project(session, project_name_or_id)
-        credentials = session.execute(
-            select(Credential).where(Credential.project_id == project.id)
-        ).scalars().all()
+        credentials = (
+            session.execute(select(Credential).where(Credential.project_id == project.id))
+            .scalars()
+            .all()
+        )
         out = []
         for credential in credentials:
             out.append(
@@ -540,8 +556,9 @@ def credential_status(project_name_or_id: str) -> list[dict[str, Any]]:
         return out
 
 
-def set_credential(project_name_or_id: str, name: str, value: str, *, key: str = "token") -> dict[str, Any]:
-    settings = get_settings()
+def set_credential(
+    project_name_or_id: str, name: str, value: str, *, key: str = "token"
+) -> dict[str, Any]:
     with session_scope() as session:
         project = get_project(session, project_name_or_id)
         slug = slugify(project.name)
@@ -587,7 +604,9 @@ def remove_credential(project_name_or_id: str, name: str) -> None:
 # --- agents ------------------------------------------------------------------
 
 
-def create_agent(project_name_or_id: str, payload: dict[str, Any], *, start: bool = True) -> dict[str, Any]:
+def create_agent(
+    project_name_or_id: str, payload: dict[str, Any], *, start: bool = True
+) -> dict[str, Any]:
     settings = get_settings()
     name = str(payload.get("name") or "").strip()
     if not name:
@@ -632,7 +651,10 @@ def create_agent(project_name_or_id: str, payload: dict[str, Any], *, start: boo
             with session_scope() as session:
                 agent = session.get(Agent, agent_id)
                 agent.status = "error"
-                agent.config = {**(agent.config or {}), "start_error": f"{type(exc).__name__}: {exc}"}
+                agent.config = {
+                    **(agent.config or {}),
+                    "start_error": f"{type(exc).__name__}: {exc}",
+                }
     return detail
 
 
@@ -682,12 +704,11 @@ def stop_agent(project_id: str, agent_id: str) -> str:
     return status
 
 
-def _agent_spec(session, agent: Agent, settings: Settings):
+def _agent_spec(session, agent: Agent, settings: Settings):  # noqa: ARG001
     from .agents import AgentSpec
 
     project = session.get(Project, agent.project_id)
     workspace = primary_workspace(session, agent.project_id)
-    del settings
     return AgentSpec(
         agent_id=agent.id,
         name=agent.name,
@@ -703,13 +724,12 @@ def _agent_spec(session, agent: Agent, settings: Settings):
 
 
 def agent_logs(project_id: str, agent_id: str, *, task_id: str = "", tail: int = 200) -> str:
-    settings = get_settings()
     with session_scope() as session:
         agent = session.get(Agent, agent_id)
         if agent is None:
             raise NotFound(f"no agent {agent_id}")
-        spec = _agent_spec(session, agent, settings)
-    provider = get_agent_provider(spec.provider, get_workspace_provider(None, settings))
+        spec = _agent_spec(session, agent, get_settings())
+    provider = get_agent_provider(spec.provider, get_workspace_provider(None, get_settings()))
     return provider.get_logs(spec, task_id=task_id, tail=tail)
 
 
@@ -732,9 +752,13 @@ def get_agent_detail(project_id: str, agent_id: str) -> dict[str, Any]:
 def list_agents(project_name_or_id: str) -> list[dict[str, Any]]:
     with session_scope() as session:
         project = get_project(session, project_name_or_id)
-        agents = session.execute(
-            select(Agent).where(Agent.project_id == project.id).order_by(Agent.created_at)
-        ).scalars().all()
+        agents = (
+            session.execute(
+                select(Agent).where(Agent.project_id == project.id).order_by(Agent.created_at)
+            )
+            .scalars()
+            .all()
+        )
         return [_agent_detail(a) for a in agents]
 
 
@@ -755,9 +779,13 @@ def create_task(project_name_or_id: str, payload: dict[str, Any]) -> dict[str, A
         if agent_ref:
             agent = get_agent(session, project.id, agent_ref)
         else:
-            agent = session.execute(
-                select(Agent).where(Agent.project_id == project.id).order_by(Agent.created_at)
-            ).scalars().first()
+            agent = (
+                session.execute(
+                    select(Agent).where(Agent.project_id == project.id).order_by(Agent.created_at)
+                )
+                .scalars()
+                .first()
+            )
             if agent is None:
                 raise Conflict(f"project {project.name} has no agents to assign the task to")
         if agent.provider in {"t3code"}:
@@ -823,12 +851,16 @@ def get_task(task_id: str) -> dict[str, Any]:
 def list_tasks(project_name_or_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
     with session_scope() as session:
         project = get_project(session, project_name_or_id)
-        tasks = session.execute(
-            select(Task)
-            .where(Task.project_id == project.id)
-            .order_by(Task.created_at.desc())
-            .limit(limit)
-        ).scalars().all()
+        tasks = (
+            session.execute(
+                select(Task)
+                .where(Task.project_id == project.id)
+                .order_by(Task.created_at.desc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
         return [_task_detail(t) for t in tasks]
 
 

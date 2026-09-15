@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kubernetes import client, config as kube_config
+from kubernetes import client
+from kubernetes import config as kube_config
 from kubernetes.config.config_exception import ConfigException
 from kubernetes.stream import stream
 
@@ -48,7 +49,9 @@ def write_kubeconfig(path: Path, *, server: str | None = None) -> Path:
     projected service-account directory directly, so we write a config that
     references the token and CA by path.
     """
-    server = server or f"https://{os.environ.get('KUBERNETES_SERVICE_HOST', 'kubernetes.default.svc')}:{os.environ.get('KUBERNETES_SERVICE_PORT', '443')}"
+    host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+    port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+    server = server or f"https://{host}:{port}"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "\n".join(
@@ -76,6 +79,21 @@ def write_kubeconfig(path: Path, *, server: str | None = None) -> Path:
         )
     )
     return path
+
+
+_cluster: Cluster | None = None
+
+
+def get_cluster() -> Cluster:
+    """The process-wide cluster handle.
+
+    A single accessor rather than a bare constructor, so a test can substitute a
+    fake and the modules that need Kubernetes do not each build their own client.
+    """
+    global _cluster
+    if _cluster is None:
+        _cluster = Cluster()
+    return _cluster
 
 
 @dataclass
@@ -149,7 +167,9 @@ class Cluster:
                 return "NotFound"
             raise
 
-    def pod_logs(self, namespace: str, pod: str, *, container: str | None = None, tail: int = 200) -> str:
+    def pod_logs(
+        self, namespace: str, pod: str, *, container: str | None = None, tail: int = 200
+    ) -> str:
         from kubernetes.client.exceptions import ApiException
 
         try:
@@ -159,7 +179,9 @@ class Cluster:
         except ApiException as exc:
             return f"<logs unavailable: {exc.status} {exc.reason}>"
 
-    def exec(self, namespace: str, pod: str, command: list[str], *, container: str | None = None) -> str:
+    def exec(
+        self, namespace: str, pod: str, command: list[str], *, container: str | None = None
+    ) -> str:
         """Run a command and return its combined output.
 
         Raising is left to the caller: `execute` wants the exit status, not an
@@ -177,7 +199,14 @@ class Cluster:
             tty=False,
         )
 
-    def apply_service(self, namespace: str, name: str, selector: dict[str, str], ports: dict[str, int], labels: dict[str, str]) -> None:
+    def apply_service(
+        self,
+        namespace: str,
+        name: str,
+        selector: dict[str, str],
+        ports: dict[str, int],
+        labels: dict[str, str],
+    ) -> None:
         from kubernetes.client.exceptions import ApiException
 
         body = client.V1Service(

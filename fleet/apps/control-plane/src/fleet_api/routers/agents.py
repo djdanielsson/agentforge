@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-
 from fleet_core import service
 from fleet_core.agents import AgentError
 from fleet_core.workspaces import ProviderError

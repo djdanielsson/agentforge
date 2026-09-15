@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 from ..config import Settings, get_settings
+from . import kubernetes_common
 from .base import ExecResult, ProviderError, WorkspaceProvider, WorkspaceSpec, WorkspaceState
 from .kubernetes_common import DEVPOD_POD_LABEL, Cluster, write_kubeconfig
 
@@ -55,7 +56,7 @@ class DevPodKubernetesProvider(WorkspaceProvider):
     @property
     def cluster(self) -> Cluster:
         if self._cluster is None:
-            self._cluster = Cluster()
+            self._cluster = kubernetes_common.get_cluster()
         return self._cluster
 
     def available(self) -> tuple[bool, str]:
@@ -168,18 +169,32 @@ class DevPodKubernetesProvider(WorkspaceProvider):
                 f"no stored workspace definition for {reference}; recreate the workspace"
             )
         self._spawn(
-            ["up", str(definition), "--id", reference, "--provider", "kubernetes",
-             "--provider-option", f"KUBERNETES_NAMESPACE={reference}",
-             "--provider-option", "CREATE_NAMESPACE=true",
-             "--log-output", "plain"],
+            [
+                "up",
+                str(definition),
+                "--id",
+                reference,
+                "--provider",
+                "kubernetes",
+                "--provider-option",
+                f"KUBERNETES_NAMESPACE={reference}",
+                "--provider-option",
+                "CREATE_NAMESPACE=true",
+                "--log-output",
+                "plain",
+            ],
             self.settings.data_dir / "logs" / f"{reference}-devpod-up.log",
         )
         return self.wait_ready(reference, timeout=READY_TIMEOUT)
 
     def stop(self, reference: str) -> None:
-        result = self._run(["stop", reference, "--provider", "kubernetes"], timeout=180, check=False)
+        result = self._run(
+            ["stop", reference, "--provider", "kubernetes"], timeout=180, check=False
+        )
         if result.returncode != 0:
-            log.warning("devpod stop %s returned %s: %s", reference, result.returncode, result.stderr[-500:])
+            log.warning(
+                "devpod stop %s returned %s: %s", reference, result.returncode, result.stderr[-500:]
+            )
         # `devpod stop` removes the pod; a pod that lingers would leave the
         # status reporting Running after a stop.
         pod = self.cluster.find_pod(reference, f"{DEVPOD_POD_LABEL}=true")

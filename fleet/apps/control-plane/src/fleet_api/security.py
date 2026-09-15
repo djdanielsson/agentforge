@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 
 from fastapi import Header, HTTPException, status
-
 from fleet_core.config import get_settings
 
 log = logging.getLogger(__name__)

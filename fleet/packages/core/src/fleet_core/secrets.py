@@ -14,13 +14,15 @@ import logging
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
-from .workspaces.kubernetes_common import Cluster
+# Accessed through the module, not imported by name: a test substitutes the
+# accessor on the module and needs that substitution to be visible here.
+from .workspaces import kubernetes_common
 
 log = logging.getLogger(__name__)
 
 
 def upsert_secret(namespace: str, name: str, data: dict[str, str], labels: dict[str, str]) -> None:
-    cluster = Cluster()
+    cluster = kubernetes_common.get_cluster()
     body = client.V1Secret(
         metadata=client.V1ObjectMeta(name=name, namespace=namespace, labels=labels),
         type="Opaque",
@@ -36,7 +38,7 @@ def upsert_secret(namespace: str, name: str, data: dict[str, str], labels: dict[
 
 
 def delete_secret(namespace: str, name: str) -> None:
-    cluster = Cluster()
+    cluster = kubernetes_common.get_cluster()
     try:
         cluster.core.delete_namespaced_secret(name, namespace)
     except ApiException as exc:
@@ -46,7 +48,7 @@ def delete_secret(namespace: str, name: str) -> None:
 
 def secret_keys(namespace: str, name: str) -> list[str]:
     """Key names only. This is what the API is allowed to show."""
-    cluster = Cluster()
+    cluster = kubernetes_common.get_cluster()
     try:
         found = cluster.core.read_namespaced_secret(name, namespace)
     except ApiException as exc:
@@ -57,7 +59,7 @@ def secret_keys(namespace: str, name: str) -> list[str]:
 
 
 def secret_present(namespace: str, name: str) -> bool:
-    cluster = Cluster()
+    cluster = kubernetes_common.get_cluster()
     try:
         cluster.core.read_namespaced_secret(name, namespace)
         return True
@@ -74,7 +76,7 @@ def copy_secret(source_namespace: str, name: str, target_namespace: str, target_
     resolves them with `secretKeyRef`, so nothing above Kubernetes holds the
     value at rest.
     """
-    cluster = Cluster()
+    cluster = kubernetes_common.get_cluster()
     try:
         found = cluster.core.read_namespaced_secret(name, source_namespace)
     except ApiException as exc:

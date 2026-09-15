@@ -20,7 +20,7 @@ from kubehelp import req  # noqa: E402
 
 NAMESPACE = "registry"
 REGISTRY = "registry.registry.svc:5000"
-REPO = "github.com/djdanielsson/agentforge"
+REPO = "djdanielsson/agentforge"
 SECRET = "fleet-gh-token"
 
 REVISION = sys.argv[1] if len(sys.argv) > 1 else "fleet"
@@ -34,7 +34,8 @@ IMAGES = [
 
 
 def upsert_secret() -> None:
-    token = open("/opt/data/work/.ghtoken2").read().strip()
+    with open("/opt/data/work/.ghtoken2") as handle:
+        token = handle.read().strip()
     body = {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -143,19 +144,21 @@ def main() -> int:
             if "__error__" in req(f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs/{name}"):
                 break
             time.sleep(2)
-        out = req(f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs", method="POST", body=job(name, image, dockerfile))
-        print(f"  {name}: {'created' if '__error__' not in out else out}")
+        out = req(
+            f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs",
+            method="POST",
+            body=job(name, image, dockerfile),
+        )
+        print(f"  {name} ({image}): {'created' if '__error__' not in out else out}")
         names.append((name, image))
 
     failed = []
-    for name, image in names:
+    for name, _image in names:
         outcome = wait_job(name)
         print(f"  {name}: {outcome}")
         if outcome != "succeeded":
             failed.append(name)
-            pod_logs = req(
-                f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=job-name%3D{name}"
-            )
+            pod_logs = req(f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=job-name%3D{name}")
             for pod in pod_logs.get("items", []):
                 log = req(
                     f"/api/v1/namespaces/{NAMESPACE}/pods/{pod['metadata']['name']}"

@@ -14,7 +14,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
-
 from fleet_core.config import get_settings
 from fleet_core.db import init_db
 from fleet_core.events import bus

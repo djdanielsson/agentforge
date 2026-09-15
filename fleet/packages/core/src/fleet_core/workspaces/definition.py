@@ -56,7 +56,10 @@ def render_definition(spec: WorkspaceSpec, settings: Settings, root: Path) -> Pa
         # so the path is written literally rather than via a devcontainer
         # variable DevPod may not expand.
         "remoteEnv": {
-            "PATH": f"/workspaces/{spec.reference}/.fleet/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH": (
+                f"/workspaces/{spec.reference}/.fleet/tools/bin:"
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ),
             "OPENCODE_CONFIG": f"/workspaces/{spec.reference}/.fleet/opencode.json",
         },
         "postCreateCommand": "bash .fleet/bootstrap.sh",

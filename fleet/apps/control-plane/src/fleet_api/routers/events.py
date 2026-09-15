@@ -13,11 +13,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
-
 from fleet_core.db import session_scope
 from fleet_core.events import bus
 from fleet_core.models import Event
+from sqlalchemy import select
 
 from ..security import require_token
 
@@ -70,9 +69,13 @@ async def stream_events(request: Request, since: int = Query(default=0)) -> Stre
         # what happened while it was away.
         if since:
             with session_scope() as session:
-                rows = session.execute(
-                    select(Event).where(Event.id > since).order_by(Event.id.asc()).limit(200)
-                ).scalars().all()
+                rows = (
+                    session.execute(
+                        select(Event).where(Event.id > since).order_by(Event.id.asc()).limit(200)
+                    )
+                    .scalars()
+                    .all()
+                )
                 for row in rows:
                     yield _sse(
                         {

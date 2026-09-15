@@ -103,9 +103,7 @@ def _run(task_id: str) -> None:
         agent = session.get(Agent, task.agent_id) if task.agent_id else None
         project = session.get(Project, task.project_id)
         if agent is None or project is None:
-            _set_status(
-                task_id, "failed", error="task has no agent or project; it was deleted"
-            )
+            _set_status(task_id, "failed", error="task has no agent or project; it was deleted")
             return
         session.expunge(agent)
         session.expunge(project)

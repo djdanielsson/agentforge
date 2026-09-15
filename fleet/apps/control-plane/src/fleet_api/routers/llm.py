@@ -37,7 +37,9 @@ def _identify(authorization: str) -> tuple[str, str]:
     settings = get_settings()
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
-        raise HTTPException(status_code=401, detail="expected Authorization: Bearer <project token>")
+        raise HTTPException(
+            status_code=401, detail="expected Authorization: Bearer <project token>"
+        )
     project_id = verify_project_token(token)
     if project_id:
         return project_id, "project-token"
@@ -130,7 +132,9 @@ async def chat_completions(
         )
     data = response.json()
     _record(data, project_id, model, x_fleet_agent, x_fleet_task)
-    log.info("llm: project=%s principal=%s model=%s", project_id or "-", principal, data.get("model"))
+    log.info(
+        "llm: project=%s principal=%s model=%s", project_id or "-", principal, data.get("model")
+    )
     return JSONResponse(data)
 
 
@@ -148,10 +152,12 @@ async def _stream(
     usage: dict[str, Any] = {}
     served_model = requested_model
     async with httpx.AsyncClient(timeout=get_settings().llm_request_timeout) as client:
-        async with client.stream("POST", upstream, headers=headers, json=payload) as response:
+        stream_ctx = client.stream("POST", upstream, headers=headers, json=payload)
+        async with stream_ctx as response:
             if response.status_code >= 400:
                 detail = (await response.aread()).decode()[:300]
-                yield f"data: {json.dumps({'error': {'message': f'gateway {response.status_code}: {detail}'}})}\n\n"
+                error = {"error": {"message": f"gateway {response.status_code}: {detail}"}}
+                yield f"data: {json.dumps(error)}\n\n"
                 yield "data: [DONE]\n\n"
                 return
             async for line in response.aiter_lines():

@@ -90,18 +90,14 @@ class Settings:
             workspace_provider=os.environ.get("FLEET_WORKSPACE_PROVIDER", "devpod"),
             devpod_binary=os.environ.get("FLEET_DEVPOD_BINARY", "devpod"),
             devpod_home=Path(os.environ.get("FLEET_DEVPOD_HOME", str(data_dir / "devpod"))),
-            kubeconfig_path=Path(
-                os.environ.get("FLEET_KUBECONFIG", str(data_dir / "kubeconfig"))
-            ),
+            kubeconfig_path=Path(os.environ.get("FLEET_KUBECONFIG", str(data_dir / "kubeconfig"))),
             workspace_image=os.environ.get(
                 "FLEET_WORKSPACE_IMAGE", "mcr.microsoft.com/devcontainers/base:ubuntu-24.04"
             ),
             workspace_cpu=os.environ.get("FLEET_WORKSPACE_CPU", "500m"),
             workspace_memory=os.environ.get("FLEET_WORKSPACE_MEMORY", "1Gi"),
             workspace_storage=os.environ.get("FLEET_WORKSPACE_STORAGE", "5Gi"),
-            workspace_storage_class=os.environ.get(
-                "FLEET_WORKSPACE_STORAGE_CLASS", "local-path"
-            ),
+            workspace_storage_class=os.environ.get("FLEET_WORKSPACE_STORAGE_CLASS", "local-path"),
             namespace_prefix=os.environ.get("FLEET_NAMESPACE_PREFIX", "fleet-"),
             llm_gateway_url=os.environ.get("FLEET_LLM_GATEWAY_URL", ""),
             llm_gateway_key=os.environ.get("FLEET_LLM_GATEWAY_KEY", ""),

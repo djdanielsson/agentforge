@@ -39,12 +39,10 @@ class T3CodeProvider(AgentProvider):
 
     def _env(self, spec: AgentSpec) -> str:
         home = f"/workspaces/{spec.workspace_reference}"
-        return " ".join(
-            [
-                f"PATH={shlex.quote(home + '/.fleet/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')}",
-                "HOME=/root",
-            ]
+        path = (
+            f"{home}/.fleet/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         )
+        return " ".join([f"PATH={shlex.quote(path)}", "HOME=/root"])
 
     def start(self, spec: AgentSpec) -> str:
         home = f"/workspaces/{spec.workspace_reference}"
@@ -57,7 +55,8 @@ if pgrep -f 't3 serve' >/dev/null 2>&1; then echo T3_ALREADY_RUNNING; exit 0; fi
   --no-browser --mode web > {T3_LOG} 2>&1 &
 echo $! > {T3_PID}
 sleep 6
-if pgrep -f 't3 serve' >/dev/null 2>&1; then echo T3_STARTED; else echo T3_FAILED; tail -n 20 {T3_LOG}; fi
+if pgrep -f 't3 serve' >/dev/null 2>&1; then echo T3_STARTED; \
+else echo T3_FAILED; tail -n 20 {T3_LOG}; fi
 """
         result = self._shell(spec, script)
         if "T3_STARTED" in result.stdout or "T3_ALREADY_RUNNING" in result.stdout:

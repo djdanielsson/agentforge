@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-
 from fleet_core import service
 from fleet_core.workspaces import ProviderError
 
@@ -66,6 +65,29 @@ def get_workspace(project: str) -> dict[str, Any]:
     return detail["workspaces"][0]
 
 
+@router.post("/projects/{project}/workspace/exec")
+def workspace_exec(project: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Run a command in the workspace.
+
+    Exposed deliberately: it is how an operator checks isolation without a
+    shell, and it is the same path an agent's provider uses.
+
+    Declared before the generic `/{action}` route: FastAPI matches in
+    declaration order, so `exec` would otherwise be read as an action name.
+    """
+    command = payload.get("command")
+    if isinstance(command, str):
+        command = ["bash", "-lc", command]
+    if not isinstance(command, list) or not command:
+        raise HTTPException(
+            status_code=422, detail="'command' must be a string or a non-empty list"
+        )
+    try:
+        return service.workspace_exec(project, command)
+    except Exception as exc:  # noqa: BLE001
+        raise _translate(exc) from exc
+
+
 @router.post("/projects/{project}/workspace/{action}")
 def workspace_action(project: str, action: str) -> dict[str, Any]:
     try:
@@ -78,24 +100,6 @@ def workspace_action(project: str, action: str) -> dict[str, Any]:
 def workspace_logs(project: str, tail: int = Query(default=200, le=2000)) -> dict[str, Any]:
     try:
         return {"logs": service.workspace_logs(project, tail=tail)}
-    except Exception as exc:  # noqa: BLE001
-        raise _translate(exc) from exc
-
-
-@router.post("/projects/{project}/workspace/exec")
-def workspace_exec(project: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Run a command in the workspace.
-
-    Exposed deliberately: it is how an operator checks isolation without a
-    shell, and it is the same path an agent's provider uses.
-    """
-    command = payload.get("command")
-    if isinstance(command, str):
-        command = ["bash", "-lc", command]
-    if not isinstance(command, list) or not command:
-        raise HTTPException(status_code=422, detail="'command' must be a string or a non-empty list")
-    try:
-        return service.workspace_exec(project, command)
     except Exception as exc:  # noqa: BLE001
         raise _translate(exc) from exc
 

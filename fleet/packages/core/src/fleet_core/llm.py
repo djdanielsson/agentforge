@@ -161,9 +161,11 @@ def record_usage(
 def project_usage(project_id: str) -> dict[str, Any]:
     """Roll usage up by agent, model and task (SPEC §13)."""
     with session_scope() as session:
-        rows = session.execute(
-            select(UsageRecord).where(UsageRecord.project_id == project_id)
-        ).scalars().all()
+        rows = (
+            session.execute(select(UsageRecord).where(UsageRecord.project_id == project_id))
+            .scalars()
+            .all()
+        )
 
         def rollup(key: Any) -> list[dict[str, Any]]:
             buckets: dict[Any, dict[str, Any]] = {}
@@ -237,15 +239,18 @@ def _token_secret() -> str:
     return _TOKEN_SECRET
 
 
-def project_token(project_id: str) -> str:
-    import base64
+def _sign(project_id: str) -> str:
+    """The raw signature inside a project token. One definition, two callers."""
     import hashlib
     import hmac
 
-    signature = hmac.new(
-        _token_secret().encode(), project_id.encode(), hashlib.sha256
-    ).hexdigest()[:32]
-    return base64.urlsafe_b64encode(f"{project_id}.{signature}".encode()).decode()
+    return hmac.new(_token_secret().encode(), project_id.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def project_token(project_id: str) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(f"{project_id}.{_sign(project_id)}".encode()).decode()
 
 
 def verify_project_token(token: str) -> str | None:
@@ -261,8 +266,7 @@ def verify_project_token(token: str) -> str | None:
     project_id, _, signature = decoded.rpartition(".")
     if not project_id:
         return None
-    expected = project_token(project_id).rpartition(".")[2]
-    if not hmac.compare_digest(signature, expected):
+    if not hmac.compare_digest(signature, _sign(project_id)):
         return None
     return project_id
 
@@ -270,7 +274,10 @@ def verify_project_token(token: str) -> str | None:
 def gateway_token_env(project_id: str) -> dict[str, str]:
     """Environment a workspace needs to reach the gateway through the fleet proxy."""
     settings = get_settings()
-    base = settings.control_plane_url or f"http://{settings.namespace}-api.{settings.namespace}.svc.cluster.local:8000"
+    base = (
+        settings.control_plane_url
+        or f"http://{settings.namespace}-api.{settings.namespace}.svc.cluster.local:8000"
+    )
     return {
         "FLEET_LLM_TOKEN": project_token(project_id),
         "FLEET_LLM_BASE_URL": f"{base.rstrip('/')}/llm/v1",

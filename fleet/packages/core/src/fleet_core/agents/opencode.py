@@ -40,9 +40,7 @@ class OpenCodeProvider(AgentProvider):
         return f"{home}/worktrees/{slug}"
 
     def _shell(self, spec: AgentSpec, script: str):
-        return self.workspaces.execute(
-            spec.workspace_reference, ["bash", "-lc", script]
-        )
+        return self.workspaces.execute(spec.workspace_reference, ["bash", "-lc", script])
 
     def _env_prefix(self, spec: AgentSpec, task_id: str = "") -> str:
         """The environment an agent run needs, inline for a non-login shell.
@@ -54,7 +52,9 @@ class OpenCodeProvider(AgentProvider):
         """
         home = self._fleet_home(spec)
         variables = {
-            "PATH": f"{home}/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH": (
+                f"{home}/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ),
             "HOME": "/root",
             **gateway_token_env(spec.project_id),
             "FLEET_AGENT": spec.name,
@@ -73,9 +73,12 @@ class OpenCodeProvider(AgentProvider):
         """
         script = (
             "set -u; "
-            f"test -x {self._fleet_home(spec)}/tools/bin/opencode && echo TOOLS_OK || echo TOOLS_MISSING; "
-            f"test -f {self._fleet_home(spec)}/opencode.json && echo CONFIG_OK || echo CONFIG_MISSING; "
-            f"test -x {self._fleet_home(spec)}/tools/bin/node && echo NODE_OK || echo NODE_MISSING"
+            f"test -x {self._fleet_home(spec)}/tools/bin/opencode "
+            "&& echo TOOLS_OK || echo TOOLS_MISSING; "
+            f"test -f {self._fleet_home(spec)}/opencode.json "
+            "&& echo CONFIG_OK || echo CONFIG_MISSING; "
+            f"test -x {self._fleet_home(spec)}/tools/bin/node "
+            "&& echo NODE_OK || echo NODE_MISSING"
         )
         result = self._shell(spec, script)
         output = result.stdout
@@ -147,7 +150,7 @@ git add -A >/dev/null 2>&1 || true
 changed=$(git status --porcelain | wc -l)
 commit=$(git rev-parse HEAD)
 if [ "$changed" -gt 0 ]; then
-  git commit -qm "fleet: {request.task_id} {spec.name}" >/dev/null 2>&1 && commit=$(git rev-parse HEAD)
+  git commit -qm "fleet: {request.task_id}" >/dev/null 2>&1 && commit=$(git rev-parse HEAD)
 fi
 echo "CHANGED=$changed"
 echo "COMMIT=$commit"

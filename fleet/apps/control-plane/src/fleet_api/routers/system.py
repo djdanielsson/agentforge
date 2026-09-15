@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends
-
 from fleet_core import service
 from fleet_core.config import get_settings
 from fleet_core.llm import get_gateway, usage_totals
