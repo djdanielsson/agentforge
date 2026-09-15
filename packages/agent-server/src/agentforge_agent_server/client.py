@@ -59,6 +59,11 @@ class Routes:
     vscode: str = "/api/conversations/{session_id}/vscode-url"
 
 
+#: The server answers anything above this with `400 Invalid limit`, rather than
+#: trimming it. Asking for more than it will give is a client bug.
+MAX_EVENT_LIMIT = 100
+
+
 class AgentServerClient:
     """One instance per workspace's OpenHands server."""
 
@@ -226,11 +231,11 @@ class AgentServerClient:
     def events(self, session_id: str, *, start_id: int = 0, limit: int = 100) -> list[AgentEvent]:
         """Events after `start_id`, oldest first.
 
-        The cursor is omitted when there is not one: the server answers
-        `start_id=0` with 400 rather than treating it as "from the beginning",
-        and the first page is what a missing cursor means anyway.
+        The cursor is omitted when there is not one: a missing cursor already
+        means "from the beginning". The page size is clamped because the server
+        treats anything above `MAX_EVENT_LIMIT` as a 400 rather than trimming it.
         """
-        params: dict[str, int] = {"limit": limit}
+        params: dict[str, int] = {"limit": max(1, min(int(limit), MAX_EVENT_LIMIT))}
         if start_id > 0:
             params["start_id"] = start_id
         data = (

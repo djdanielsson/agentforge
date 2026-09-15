@@ -147,6 +147,23 @@ def test_send_message_posts_the_turn_and_returns_nothing(make_client):
     assert captured["body"] == {"message": "add a health endpoint"}
 
 
+def test_a_page_size_the_server_would_reject_is_clamped(make_client):
+    """The server answers `limit=200` with 400 Invalid limit and returns nothing.
+
+    This is what kept the activity panel empty: the endpoint's default page size
+    was larger than the server's maximum.
+    """
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=[])
+
+    make_client(handler).events("c-1", limit=500)
+
+    assert "limit=100" in seen["url"]
+
+
 def test_events_read_a_bare_list_of_openhands_events(make_client):
     payload = [
         {"id": 1, "source": "user", "message": "add auth"},
