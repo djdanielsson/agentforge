@@ -5,7 +5,12 @@ add fleet-specific settings to project creation, so that one T3 Code UI manages
 many projects instead of each project having its own T3 Code?
 
 **Answer: no plugin API exists.** T3 Code v0.0.40 ships no extension mechanism for
-UI or settings. What follows is the evidence, and the three shapes that are
+UI or settings. (Status 2026-09-16: upstream `main` has since grown a plugin
+host — `@t3tools/plugin-api`, sidebar placements, `plugins.*` RPC — but it is
+only in `0.0.41-nightly`/`preview` builds; latest stable is still `0.0.40`.
+Revisit a Fleet sidebar plugin, our code with no fork, once it goes stable.
+Until then the only fork-free customizations are build-time bundle patches,
+documented where they are applied in `deploy/images/workspace/install-tools.sh`.) What follows is the evidence, and the three shapes that are
 actually available.
 
 ## What was checked

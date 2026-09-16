@@ -36,8 +36,19 @@ npm install -g --prefix "$TOOLS" --no-fund --no-audit \
 # message (e.g. the 401 from a misconfigured gateway token) surfaces as
 # `TypeError: Cannot read properties of undefined (reading 'trim')` instead
 # of the real cause. Patch the installed bundle defensively; re-check on bump.
+#
+# Same story one screen down in the same file: the default model for the
+# opencode driver is hard-coded to `openai/gpt-5`, which our workspaces never
+# configure (the only provider is `fleet`), so every new thread 500s with
+# `ProviderModelNotFoundError` until the user picks another model.
+# `fleet/local-coder` is the default because it is allowed under every LLM
+# policy, including `localOnly`; projects that allow more can switch to
+# `fleet/smart` in the picker. Both strings occur exactly twice in the
+# bundle (the turn default and the title-generation default); re-check on bump.
 if [ -f "$TOOLS/lib/node_modules/t3/dist/bin.mjs" ]; then
   sed -i 's/cause\.message\.trim()\.length/((typeof cause.message === "string" ? cause.message : "")).trim().length/; s/return cause\.message\.trim()/return (typeof cause.message === "string" ? cause.message : "").trim()/' \
+    "$TOOLS/lib/node_modules/t3/dist/bin.mjs" || true
+  sed -i 's#"openai/gpt-5"#"fleet/local-coder"#g' \
     "$TOOLS/lib/node_modules/t3/dist/bin.mjs" || true
 fi
 
