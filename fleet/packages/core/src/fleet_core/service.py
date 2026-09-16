@@ -579,6 +579,228 @@ def workspace_exec(project_name_or_id: str, command: list[str]) -> dict[str, Any
     }
 
 
+# --- files -------------------------------------------------------------------
+#
+# Hand-editing from the dashboard (one UI over every project, whatever the
+# workspace provider). All four operations resolve the project's own provider
+# and jail paths to that provider's repository root: a checkout workspace *is*
+# its repo under /projects/<name>, a DevPod workspace keeps its checkout at
+# <root>/.fleet/repo. Nothing here takes an absolute host path.
+
+#: Refuse to read more than this through the API in one call.
+MAX_FILE_BYTES = 200_000
+#: Cap a single directory listing so `/` can never page the world.
+MAX_LIST_ENTRIES = 500
+
+#: Prefixes the editor may list and read but never write: git's own metadata
+#: and fleet's own state (including the gateway token and credentials).
+READ_ONLY_PREFIXES = (".git/", ".fleet/")
+
+
+def _safe_relpath(raw: str | None) -> str:
+    """Jail a UI-supplied path inside the repository.
+
+    Leading slashes are stripped (an absolute path becomes relative), `.`
+    segments are dropped, and any `..` is a conflict rather than a
+    best-effort clean: silently resolving `a/../..` is how an editor reads
+    outside the repo it was opened on.
+    """
+    candidate = (raw or "").strip().replace("\x00", "")
+    candidate = candidate.strip("/")
+    if not candidate or candidate == ".":
+        return ""
+    parts: list[str] = []
+    for part in candidate.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            raise Conflict(f"{raw!r} escapes the repository")
+        parts.append(part)
+    if not parts:
+        return ""
+    rel = "/".join(parts)
+    if len(rel) > 512:
+        raise Conflict("path is too long")
+    return rel
+
+
+def _resolve_repo(project_name_or_id: str):
+    """Return (provider, reference, repo_root, project_id) for a project."""
+    settings = get_settings()
+    with session_scope() as session:
+        project = get_project(session, project_name_or_id)
+        workspace = primary_workspace(session, project.id)
+        reference = workspace.reference
+        project_id = project.id
+        provider = get_workspace_provider(project.workspace_provider or None, settings)
+        root = provider.layout(reference).repo_path
+    return provider, reference, root, project_id
+
+
+def list_files(project_name_or_id: str, path: str = "") -> dict[str, Any]:
+    import shlex
+
+    provider, reference, root, _ = _resolve_repo(project_name_or_id)
+    rel = _safe_relpath(path)
+    target = f"{root}/{rel}" if rel else root
+    result = provider.execute(
+        reference,
+        [
+            "/bin/bash",
+            "-lc",
+            f"set -u; target={shlex.quote(target)}; "
+            'test -d "$target" || { echo NOT_A_DIRECTORY; exit 3; }; '
+            f"find \"$target\" -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%f\\n' "
+            f"| sort -t \"$(printf '\\t')\" -k3 | head -n {MAX_LIST_ENTRIES + 1}",
+        ],
+    )
+    if result.exit_code == 3 or "NOT_A_DIRECTORY" in (result.stdout or ""):
+        raise NotFound(f"no directory {rel or '/'} in this project")
+    if result.exit_code != 0:
+        raise Conflict(f"could not list {rel or '/'}: {(result.stderr or result.stdout)[-300:]}")
+    entries: list[dict[str, Any]] = []
+    truncated = False
+    for line in (result.stdout or "").splitlines():
+        kind, _, name = (line.split("\t", 2) + ["", "", ""])[:3]
+        if not name:
+            continue
+        if len(entries) >= MAX_LIST_ENTRIES:
+            truncated = True
+            break
+        child = f"{rel}/{name}" if rel else name
+        entries.append(
+            {
+                "name": name,
+                "path": child,
+                "is_dir": kind == "d",
+                "size": int(_) if str(_).isdigit() else 0,
+            }
+        )
+    return {"path": rel, "entries": entries, "truncated": truncated}
+
+
+def read_file(project_name_or_id: str, path: str) -> dict[str, Any]:
+    import shlex
+
+    provider, reference, root, _ = _resolve_repo(project_name_or_id)
+    rel = _safe_relpath(path)
+    if not rel:
+        raise Conflict("a file path is required")
+    target = f"{root}/{rel}"
+    result = provider.execute(
+        reference,
+        [
+            "/bin/bash",
+            "-lc",
+            f"set -u; target={shlex.quote(target)}; "
+            'test -f "$target" || { echo NOT_A_FILE; exit 3; }; '
+            f'size=$(wc -c < "$target"); '
+            f'if [ "$size" -gt {MAX_FILE_BYTES} ]; then echo "TOO_LARGE:$size"; exit 4; fi; '
+            'cat "$target"',
+        ],
+    )
+    if result.exit_code == 3:
+        raise NotFound(f"no file {rel} in this project")
+    if result.exit_code == 4:
+        raise Conflict(f"{rel} is larger than the {MAX_FILE_BYTES}-byte read limit")
+    if result.exit_code != 0:
+        raise Conflict(f"could not read {rel}: {(result.stderr or result.stdout)[-300:]}")
+    return {"path": rel, "content": result.stdout or "", "size": len(result.stdout or "")}
+
+
+def write_file(project_name_or_id: str, path: str, content: str = "") -> dict[str, Any]:
+    import shlex
+
+    provider, reference, root, project_id = _resolve_repo(project_name_or_id)
+    rel = _safe_relpath(path)
+    if not rel:
+        raise Conflict("a file path is required")
+    if rel == ".git" or rel == ".fleet" or rel.startswith(READ_ONLY_PREFIXES):
+        raise Conflict(f"{rel} is managed by git or fleet; it cannot be edited here")
+    if content is None:
+        content = ""
+    if not isinstance(content, str):
+        raise Conflict("content must be text")
+    if len(content.encode()) > MAX_FILE_BYTES:
+        raise Conflict(f"content is larger than the {MAX_FILE_BYTES}-byte write limit")
+    target = f"{root}/{rel}"
+    payload = content
+    result = provider.execute(
+        reference,
+        [
+            "/bin/bash",
+            "-lc",
+            f"set -u; target={shlex.quote(target)}; "
+            f'mkdir -p "$(dirname "$target")"; '
+            f"head -c {len(payload.encode())} > \"$target\"",
+        ],
+        stdin_data=payload,
+    )
+    if result.exit_code != 0:
+        raise Conflict(f"could not write {rel}: {(result.stderr or result.stdout)[-300:]}")
+    publish_sync(
+        "file.saved",
+        message=f"{rel} saved",
+        project_id=project_id,
+        payload={"path": rel, "bytes": len(payload.encode())},
+    )
+    return {"path": rel, "bytes": len(payload.encode())}
+
+
+def commit_files(project_name_or_id: str, message: str = "") -> dict[str, Any]:
+    import shlex
+
+    text = (message or "").strip() or "fleet: dashboard edit"
+    if len(text) > 500:
+        raise Conflict("commit message is too long")
+    provider, reference, root, project_id = _resolve_repo(project_name_or_id)
+    payload = text
+    result = provider.execute(
+        reference,
+        [
+            "/bin/bash",
+            "-lc",
+            f"set -u; root={shlex.quote(root)}; "
+            'cd "$root" || { echo NO_REPO; exit 3; }; '
+            f'msg=$(head -c {len(payload.encode())}); '
+            'git config user.email fleet@localhost >/dev/null 2>&1 || true; '
+            'git config user.name fleet >/dev/null 2>&1 || true; '
+            'git add -A >/dev/null 2>&1 || true; '
+            'changed=$(git status --porcelain | wc -l); '
+            'commit=$(git rev-parse HEAD 2>/dev/null || echo ""); '
+            'if [ "$changed" -gt 0 ]; then '
+            'git commit -qm "$msg" >/dev/null 2>&1 && commit=$(git rev-parse HEAD); fi; '
+            'echo "CHANGED=$changed"; echo "COMMIT=$commit"; '
+            'echo "BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)"',
+        ],
+        stdin_data=payload,
+    )
+    if result.exit_code == 3 or "NO_REPO" in (result.stdout or ""):
+        raise NotFound("this workspace has no git checkout to commit")
+    if result.exit_code != 0:
+        raise Conflict(f"could not commit: {(result.stderr or result.stdout)[-300:]}")
+    detail = {"changed": "0", "commit": "", "branch": ""}
+    for line in (result.stdout or "").splitlines():
+        if line.startswith("CHANGED="):
+            detail["changed"] = line.split("=", 1)[1].strip()
+        elif line.startswith("COMMIT="):
+            detail["commit"] = line.split("=", 1)[1].strip()
+        elif line.startswith("BRANCH="):
+            detail["branch"] = line.split("=", 1)[1].strip()
+    if detail["commit"]:
+        publish_sync(
+            "commit.created",
+            message=f"commit {detail['commit'][:12]} on {detail['branch']} (dashboard)",
+            project_id=project_id,
+            payload={"commit": detail["commit"], "branch": detail["branch"]},
+        )
+    return {
+        "branch": detail["branch"],
+        "commit": detail["commit"],
+        "changed_files": detail["changed"],
+    }
+
+
 # --- credentials -------------------------------------------------------------
 
 

@@ -88,6 +88,24 @@ def workspace_exec(project: str, payload: dict[str, Any] = Body(...)) -> dict[st
         raise _translate(exc) from exc
 
 
+@router.post("/projects/{project}/workspace/commit")
+def commit_files(
+    project: str, payload: dict[str, Any] = Body(default_factory=dict)
+) -> dict[str, Any]:
+    """Commit the working tree. Untracked-but-ignored fleet files stay out.
+
+    Declared before the generic `/{action}` route for the same reason `exec`
+    is: otherwise `commit` reads as an action name.
+    """
+    message = payload.get("message", "") if isinstance(payload, dict) else ""
+    if message is not None and not isinstance(message, str):
+        raise HTTPException(status_code=422, detail="'message' must be a string")
+    try:
+        return service.commit_files(project, message or "")
+    except Exception as exc:  # noqa: BLE001
+        raise _translate(exc) from exc
+
+
 @router.post("/projects/{project}/workspace/{action}")
 def workspace_action(project: str, action: str) -> dict[str, Any]:
     try:
@@ -100,6 +118,41 @@ def workspace_action(project: str, action: str) -> dict[str, Any]:
 def workspace_logs(project: str, tail: int = Query(default=200, le=2000)) -> dict[str, Any]:
     try:
         return {"logs": service.workspace_logs(project, tail=tail)}
+    except Exception as exc:  # noqa: BLE001
+        raise _translate(exc) from exc
+
+
+@router.get("/projects/{project}/files")
+def list_files(project: str, path: str = Query(default="")) -> dict[str, Any]:
+    """List a directory in the project's repository.
+
+    `path` is relative to the repo root (`""` is the root itself) and can
+    never escape it; `..` is a 409, not a resolution.
+    """
+    try:
+        return service.list_files(project, path)
+    except Exception as exc:  # noqa: BLE001
+        raise _translate(exc) from exc
+
+
+@router.get("/projects/{project}/files/content")
+def read_file(project: str, path: str = Query(...)) -> dict[str, Any]:
+    try:
+        return service.read_file(project, path)
+    except Exception as exc:  # noqa: BLE001
+        raise _translate(exc) from exc
+
+
+@router.put("/projects/{project}/files/content")
+def write_file(project: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    path = payload.get("path", "")
+    content = payload.get("content", "")
+    if not isinstance(path, str) or not path.strip():
+        raise HTTPException(status_code=422, detail="'path' must be a non-empty string")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=422, detail="'content' must be a string")
+    try:
+        return service.write_file(project, path, content)
     except Exception as exc:  # noqa: BLE001
         raise _translate(exc) from exc
 

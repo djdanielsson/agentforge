@@ -170,6 +170,38 @@
       <h2>Tasks</h2>
       <div id="tasks"><span class="dim">no tasks yet</span></div>
     </section>
+    <section class="panel">
+      <h2>Files</h2>
+      <div class="grid2">
+        <div>
+          <label for="fproject">Project</label>
+          <select id="fproject"></select>
+        </div>
+        <div>
+          <label for="fpath">Directory</label>
+          <div class="row">
+            <input id="fpath" class="mono" value="" placeholder="(repo root)">
+            <button id="fup" title="up one level">↑</button>
+            <button id="fload">list</button>
+          </div>
+        </div>
+      </div>
+      <div id="flist" style="margin-top:8px"><span class="dim">pick a project, then list</span></div>
+      <label for="fedit">Editor — <span id="fopen" class="mono">no file open</span></label>
+      <textarea id="fedit" class="mono" rows="18" spellcheck="false" placeholder="click a file above to open it"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="fsave">Save file</button>
+        <input id="fmsg" placeholder="commit message (optional)" style="flex:1">
+        <button id="fcommit">Commit</button>
+        <span class="dim" id="fstatus"></span>
+      </div>
+      <p class="dim" style="margin:8px 0 0">
+        One editor for every project: the same routes list, read, write and
+        commit a DevPod namespace and a checkout directory.
+        <span class="mono">.git/</span> and <span class="mono">.fleet/</span>
+        are read-only here.
+      </p>
+    </section>
   </div>
 </main>
 
@@ -205,6 +237,7 @@ async function api(path, options = {}) {
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const cls = (s) => "status s-" + String(s || "unknown").toLowerCase();
+const files = { path: "", openPath: "" };
 
 function renderProjects() {
   const host = document.getElementById("projects");
@@ -283,7 +316,107 @@ function renderAgentSelect() {
     `<option value="${esc(a.id)}">${esc(a.name)} · ${esc(a.provider)}${a.status ? " (" + esc(a.status) + ")" : ""}</option>`
   ).join("") || '<option value="">no agents yet</option>';
   if (previous) select.value = previous;
+
+  const fproject = document.getElementById("fproject");
+  const fprev = fproject.value;
+  fproject.innerHTML = state.projects.map((p) =>
+    `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("") || '<option value="">no projects yet</option>';
+  if (fprev) fproject.value = fprev;
+  else if (state.selected) fproject.value = state.selected;
 }
+
+function fileProject() {
+  return document.getElementById("fproject").value || state.selected || (state.projects[0] && state.projects[0].name) || "";
+}
+
+async function loadFiles() {
+  const project = fileProject();
+  const status = document.getElementById("fstatus");
+  const host = document.getElementById("flist");
+  if (!project) { host.innerHTML = '<span class="dim">no project</span>'; return; }
+  const path = document.getElementById("fpath").value.trim();
+  status.textContent = "listing…";
+  try {
+    const body = await api(`/api/v1/projects/${encodeURIComponent(project)}/files?path=${encodeURIComponent(path)}`);
+    files.path = body.path || "";
+    document.getElementById("fpath").value = files.path;
+    host.innerHTML = body.entries.length ? body.entries.map((e) =>
+      `<div class="row" style="padding:2px 0">
+        <span class="mono">${e.is_dir ? "📁" : "📄"}</span>
+        <a href="#" data-f="${esc(e.path)}" data-dir="${e.is_dir ? 1 : 0}">${esc(e.name)}</a>
+        <span class="dim mono">${e.is_dir ? "" : e.size + " b"}</span>
+      </div>`).join("") + (body.truncated ? '<div class="dim">…truncated</div>' : "")
+      : '<span class="dim">empty directory</span>';
+    status.textContent = "";
+  } catch (error) { status.textContent = error.message; }
+}
+
+async function openFile(path) {
+  const project = fileProject();
+  const status = document.getElementById("fstatus");
+  status.textContent = "opening…";
+  try {
+    const body = await api(`/api/v1/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}`);
+    files.openPath = body.path;
+    document.getElementById("fopen").textContent = body.path;
+    document.getElementById("fedit").value = body.content || "";
+    status.textContent = `${body.size} bytes`;
+  } catch (error) { status.textContent = error.message; }
+}
+
+document.getElementById("flist").addEventListener("click", (event) => {
+  const link = event.target.closest("a[data-f]");
+  if (!link) return;
+  event.preventDefault();
+  if (link.dataset.dir === "1") {
+    document.getElementById("fpath").value = link.dataset.f;
+    loadFiles();
+  } else {
+    openFile(link.dataset.f);
+  }
+});
+document.getElementById("fload").addEventListener("click", loadFiles);
+document.getElementById("fup").addEventListener("click", () => {
+  const parts = document.getElementById("fpath").value.split("/").filter(Boolean);
+  parts.pop();
+  document.getElementById("fpath").value = parts.join("/");
+  loadFiles();
+});
+document.getElementById("fproject").addEventListener("change", () => {
+  document.getElementById("fpath").value = "";
+  files.openPath = "";
+  document.getElementById("fopen").textContent = "no file open";
+  document.getElementById("fedit").value = "";
+  loadFiles();
+});
+document.getElementById("fsave").addEventListener("click", async () => {
+  const project = fileProject();
+  const status = document.getElementById("fstatus");
+  if (!files.openPath) { status.textContent = "open a file first"; return; }
+  status.textContent = "saving…";
+  try {
+    const out = await api(`/api/v1/projects/${encodeURIComponent(project)}/files/content`, {
+      method: "PUT", body: JSON.stringify({ path: files.openPath, content: document.getElementById("fedit").value }),
+    });
+    status.textContent = `saved ${out.bytes} bytes — commit to keep it in git`;
+    loadFiles();
+  } catch (error) { status.textContent = error.message; }
+});
+document.getElementById("fcommit").addEventListener("click", async () => {
+  const project = fileProject();
+  const status = document.getElementById("fstatus");
+  status.textContent = "committing…";
+  try {
+    const out = await api(`/api/v1/projects/${encodeURIComponent(project)}/workspace/commit`, {
+      method: "POST", body: JSON.stringify({ message: document.getElementById("fmsg").value }),
+    });
+    status.textContent = out.commit
+      ? `committed ${String(out.commit).slice(0, 12)} on ${out.branch}`
+      : "nothing to commit";
+    document.getElementById("fmsg").value = "";
+    await refresh();
+  } catch (error) { status.textContent = error.message; }
+});
 
 async function refresh() {
   const [projects, tasks, health, usage, models] = await Promise.all([
@@ -319,7 +452,7 @@ document.addEventListener("click", async (event) => {
   const detail = document.getElementById("detail-" + project);
   try {
     if (action === "delete") {
-      if (!confirm(`delete project ${project} and its namespace?`)) return;
+      if (!confirm(`delete project ${project} and its workspace?`)) return;
       await api("/api/v1/projects/" + encodeURIComponent(project), { method: "DELETE" });
     } else if (action === "task") {
       state.selected = project; renderAgentSelect();
