@@ -50,10 +50,40 @@ JSON
 
 # The environment's default config: the fleet tools, wherever a session is
 # opened. A checkout additionally carries its own opencode.json (with the fleet
-# gateway provider, which needs a project-scoped token), written by the control
+# gateway provider, which carries a per-project token), written by the control
 # plane when the project is created.
 write_opencode_config /root/.config/opencode/opencode.json
 write_opencode_config "/home/${AGENT_USER}/.config/opencode/opencode.json"
+
+# `opencode run` deadlocks when it runs as uid 0 in this image: the same
+# binary, config and directory complete in ~2s as the agent user and hang
+# forever as root (FINDINGS §9.13 — verified for fleet-run tasks, which drop
+# privileges with setpriv). T3 spawns opencode as its own user, so the server
+# itself runs as the agent user; running it as root would hang every T3-driven
+# turn the same way, surfacing only as T3's `trim` TypeError while formatting
+# the timeout. Hand the state dir and the agent config to that user first.
+if id -u "$AGENT_USER" >/dev/null 2>&1; then
+  chown -R "$AGENT_USER:$AGENT_USER" "$T3_HOME" "/home/${AGENT_USER}/.config" 2>/dev/null || true
+  export HOME="/home/${AGENT_USER}"
+  export T3CODE_HOME="$T3_HOME"
+  export PATH="/usr/local/bin:$PATH"
+  echo "fleet T3 environment starting as $AGENT_USER: projects=$PROJECTS home=$T3_HOME mcp=${FLEET_MCP_URL:-(unset)}"
+  # No project is bootstrapped from the working directory: the control plane
+  # registers each project explicitly with `t3 project add` when it creates the
+  # checkout, so a project here always corresponds to a fleet project.
+  exec setpriv "--reuid=$AGENT_USER" "--regid=$AGENT_USER" --init-groups \
+    env "HOME=$HOME" "T3CODE_HOME=$T3_HOME" "PATH=$PATH" \
+    ${FLEET_MCP_URL:+FLEET_MCP_URL=$FLEET_MCP_URL} \
+    ${FLEET_API_TOKEN:+FLEET_API_TOKEN=$FLEET_API_TOKEN} \
+    t3 serve \
+      --host 0.0.0.0 \
+      --port "$PORT" \
+      --mode web \
+      --no-browser \
+      --base-dir "$T3_HOME"
+fi
+
+# Fallback: image without the agent user keeps the old behaviour.
 
 # `t3 project add` writes the registry into $T3CODE_HOME; the CLI and the server
 # have to agree on it, so it is exported as well as passed on the command line.

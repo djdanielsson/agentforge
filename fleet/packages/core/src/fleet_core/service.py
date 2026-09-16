@@ -727,8 +727,15 @@ def start_agent(project_id: str, agent_id: str) -> str:
         if agent is None:
             raise NotFound(f"no agent {agent_id}")
         agent_spec = _agent_spec(session, agent, settings)
+        # The project's provider, not the deployment default: a checkout
+        # agent probed through the DevPod provider reports "opencode is not
+        # installed" because the layout (and the exec target) is wrong.
+        project = session.get(Project, agent.project_id)
+        provider_name = project.workspace_provider if project else None
 
-    provider = get_agent_provider(agent_spec.provider, get_workspace_provider(None, settings))
+    provider = get_agent_provider(
+        agent_spec.provider, get_workspace_provider(provider_name, settings)
+    )
     status = provider.start(agent_spec)
     endpoint = provider.endpoint(agent_spec)
     with session_scope() as session:
@@ -752,7 +759,9 @@ def stop_agent(project_id: str, agent_id: str) -> str:
         if agent is None:
             raise NotFound(f"no agent {agent_id}")
         spec = _agent_spec(session, agent, settings)
-    provider = get_agent_provider(spec.provider, get_workspace_provider(None, settings))
+        project = session.get(Project, agent.project_id)
+        provider_name = project.workspace_provider if project else None
+    provider = get_agent_provider(spec.provider, get_workspace_provider(provider_name, settings))
     status = provider.stop(spec)
     with session_scope() as session:
         agent = session.get(Agent, agent_id)
@@ -791,7 +800,13 @@ def agent_logs(project_id: str, agent_id: str, *, task_id: str = "", tail: int =
         if agent is None:
             raise NotFound(f"no agent {agent_id}")
         spec = _agent_spec(session, agent, get_settings())
-    provider = get_agent_provider(spec.provider, get_workspace_provider(None, get_settings()))
+        from .models import Project
+
+        project = session.get(Project, agent.project_id)
+        provider_name = project.workspace_provider if project else None
+    provider = get_agent_provider(
+        spec.provider, get_workspace_provider(provider_name, get_settings())
+    )
     return provider.get_logs(spec, task_id=task_id, tail=tail)
 
 

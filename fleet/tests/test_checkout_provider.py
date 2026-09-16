@@ -161,9 +161,8 @@ def test_create_fails_loudly_when_the_checkout_cannot_be_made(no_real_cluster): 
 
 def test_the_opencode_config_carries_the_gateway_and_the_fleet_mcp_server(no_real_cluster):  # noqa: ARG001
     document = opencode_config(_spec(), get_settings())
-    # The agent holds a project-scoped gateway token, never a vendor key — and
-    # it is a reference to the run's environment, not a value on disk: every
-    # project in a shared environment runs as the same user.
+    # Fleet runs are handed the project-scoped token in their own environment,
+    # so the default keeps it off disk as a reference.
     assert document["provider"]["fleet"]["options"]["apiKey"] == "{env:FLEET_LLM_TOKEN}"
     assert "project-token-value" not in json.dumps(document)
     assert document["model"] == "fleet/local-coder"
@@ -172,6 +171,18 @@ def test_the_opencode_config_carries_the_gateway_and_the_fleet_mcp_server(no_rea
     assert server["type"] == "remote"
     assert server["url"].endswith("/mcp")
     assert server["enabled"] is True
+
+
+def test_the_t3_copy_embeds_the_project_token(no_real_cluster):  # noqa: ARG001
+    """T3 is one shared server, so its env cannot carry a per-project token.
+
+    The checkout-root copy embeds the value from the spec: an env reference
+    there resolves to the pod's global value (previously the signing secret,
+    rejected as `unknown project token`), while a project-scoped token on
+    disk spends only that project's quota.
+    """
+    document = opencode_config(_spec(), get_settings(), embed_token=True)
+    assert document["provider"]["fleet"]["options"]["apiKey"] == "project-token-value"
 
 
 def test_create_writes_the_config_where_t3_sessions_will_find_it(no_real_cluster):  # noqa: ARG001
@@ -183,7 +194,12 @@ def test_create_writes_the_config_where_t3_sessions_will_find_it(no_real_cluster
     commands = "\n".join(environment.commands)
     assert "/projects/demo/.fleet/opencode.json" in writes
     # The project-root copy is what opencode reads for a session in that dir.
-    assert "cp /projects/demo/.fleet/opencode.json /projects/demo/opencode.json" in writes
+    # It is written separately (not `cp`) because it embeds the project token
+    # while the fleet copy keeps the env reference.
+    assert "/projects/demo/opencode.json" in writes
+    payloads = [payload for _, payload in environment.writes]
+    assert any("{env:FLEET_LLM_TOKEN}" in payload for payload in payloads)
+    assert any("project-token-value" in payload for payload in payloads)
     # Fleet's own files are excluded from git locally, so the checkout stays
     # clean for T3 and for an agent looking at `git status`.
     assert ".git/info/exclude" in commands

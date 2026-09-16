@@ -530,17 +530,24 @@ fi
         """The opencode config for this project, in two places.
 
         `.fleet/opencode.json` is what a fleet-driven run points `OPENCODE_CONFIG`
-        at. The copy at the checkout root is what a *T3-driven* session in that
-        directory picks up: opencode reads a project config from the working
-        directory upward, so a session opened on `/projects/<name>` gets the
-        fleet gateway and the fleet tools without anyone configuring it. The
-        copy is added to `.git/info/exclude` (local, never committed) so it does
-        not show up as an untracked file in the checkout.
+        at: it keeps ``{env:FLEET_LLM_TOKEN}`` as a reference, because the run
+        is handed the project-scoped token in its own environment. The copy at
+        the checkout root is what a *T3-driven* session in that directory picks
+        up: opencode reads a project config from the working directory upward,
+        so a session opened on `/projects/<name>` gets the fleet gateway and
+        the fleet tools without anyone configuring it. That copy embeds the
+        project token value — the shared T3 server has one environment for
+        every project, so an env reference there resolves to the pod's global
+        value (which was the signing secret, rejected as `unknown project
+        token`) rather than to this project. Both copies are added to
+        `.git/info/exclude` (local, never committed) so the checkout stays
+        clean.
 
         Written over stdin for the same reason credentials are: a document in
         `argv` is a document in the API server's log.
         """
         payload = json.dumps(opencode_config(spec, self.settings), indent=2)
+        t3_payload = json.dumps(opencode_config(spec, self.settings, embed_token=True), indent=2)
         root_config = f"{layout.root}/opencode.json"
         wrote = self._run(
             [
@@ -550,14 +557,28 @@ fi
                 f"head -c {len(payload.encode())} > "
                 f"{shlex.quote(layout.config_path)}; "
                 f"chmod 644 {shlex.quote(layout.config_path)}; "
-                f"cp {shlex.quote(layout.config_path)} {shlex.quote(root_config)}; "
-                f"{self._chown_to_agent(layout.config_path)}; "
-                f"{self._chown_to_agent(root_config)}",
+                f"{self._chown_to_agent(layout.config_path)}",
             ],
             stdin_data=payload,
         )
         if wrote.exit_code != 0:
             log.warning("writing %s failed: %s", layout.config_path, wrote.stderr[:300])
+            return
+        # The T3 copy carries the embedded token and must travel on its own
+        # stdin write: `cp` would carry the env reference that breaks T3
+        # sessions in the shared environment.
+        moved = self._run(
+            [
+                "/bin/bash",
+                "-lc",
+                f"head -c {len(t3_payload.encode())} > {shlex.quote(root_config)}; "
+                f"chmod 644 {shlex.quote(root_config)}; "
+                f"{self._chown_to_agent(root_config)}",
+            ],
+            stdin_data=t3_payload,
+        )
+        if moved.exit_code != 0:
+            log.warning("writing %s failed: %s", root_config, moved.stderr[:300])
 
     def _chown_to_agent(self, path: str) -> str:
         user = shlex.quote(self.settings.workspace_agent_user)
@@ -605,18 +626,39 @@ fi
         return candidate
 
 
-def opencode_config(spec: WorkspaceSpec, settings: Settings | None = None) -> dict:
+def opencode_config(
+    spec: WorkspaceSpec, settings: Settings | None = None, *, embed_token: bool = False
+) -> dict:
     """The opencode config for a fleet-run agent in a checkout workspace.
 
     Two things it must carry: the gateway (so the agent has a model and holds no
     vendor key) and the fleet MCP server (so it can act on the fleet, not just
     answer). It is written per project rather than baked into the image because
     the token in it is project-scoped.
+
+    `embed_token=False` (the default) writes ``{env:FLEET_LLM_TOKEN}`` as the
+    provider key: a fleet-driven run is handed the project-scoped token in its
+    own environment (see ``agents.opencode._env_prefix``), so the value is
+    never on disk.
+
+    `embed_token=True` writes the actual ``FLEET_LLM_TOKEN`` value from
+    ``spec.environment`` into the document. That copy is for T3-driven
+    sessions opened on the checkout: the T3 server is one shared process, so
+    its environment cannot carry a per-project token, and the env reference
+    would resolve to whatever the pod was started with (currently the signing
+    secret, which the proxy rightly rejects with ``unknown project token``).
+    A checkout workspace has no per-project isolation to preserve — every
+    project is a directory readable from every other via workspace exec — so
+    a project-scoped token on disk spends only that project's quota, while
+    the signing secret this replaces would forge any project.
     """
     settings = settings or get_settings()
     model = spec.environment.get("FLEET_LLM_MODEL", settings.llm_default_model)
     models = spec.environment.get("FLEET_LLM_MODELS", "").split(",") or [model]
     base_url = spec.environment.get("FLEET_LLM_BASE_URL", "")
+    api_key = "{env:FLEET_LLM_TOKEN}"
+    if embed_token:
+        api_key = spec.environment.get("FLEET_LLM_TOKEN", "") or api_key
     server: dict = {
         "type": "remote",
         "url": settings.mcp_endpoint,
@@ -638,10 +680,11 @@ def opencode_config(spec: WorkspaceSpec, settings: Settings | None = None) -> di
                 "name": "Fleet Gateway",
                 "options": {
                     "baseURL": base_url,
-                    # Same reason as the header above: the run is handed the
-                    # project-scoped token in its environment (see
-                    # `agents.opencode._env_prefix`), and it is never on disk.
-                    "apiKey": "{env:FLEET_LLM_TOKEN}",
+                    # Fleet runs are handed the project-scoped token in their
+                    # own environment (see `agents.opencode._env_prefix`), so
+                    # the default keeps it off disk. The T3 copy below embeds
+                    # the value because a shared server has no per-project env.
+                    "apiKey": api_key,
                 },
                 "models": {name: {"name": name} for name in models if name},
             }

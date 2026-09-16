@@ -91,26 +91,24 @@ spec:
               value: {{ join "," .Values.llm.models | quote }}
             - name: FLEET_LLM_GATEWAY_URL
               value: {{ .Values.llm.gatewayUrl | quote }}
-            # Both the operator token and the gateway master key are read from
-            # the cluster's own Secrets, so no value passes through values.yaml,
-            # a shell or a log.
+            # The operator token for the fleet MCP server. The pod must NOT carry
+            # FLEET_LLM_TOKEN or the token signing secret: a checkout's T3
+            # session reads its own project-scoped gateway token from the
+            # checkout's opencode.json (embedded per project), while the pod's
+            # global environment would resolve `{env:FLEET_LLM_TOKEN}` to one
+            # value for every project — previously the signing secret itself,
+            # which the LLM proxy rightly rejects as `unknown project token`
+            # and which would let any workspace exec forge any project token.
             - name: FLEET_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Release.Name }}-api
                   key: api-token
                   optional: true
-            - name: FLEET_LLM_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Release.Name }}-api
-                  key: token-secret
-                  optional: true
-            - name: FLEET_LLM_GATEWAY_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.llm.secretName }}
-                  key: LITELLM_MASTER_KEY
+            # No FLEET_LLM_GATEWAY_KEY here: the gateway master key lives only
+            # in the control plane (SPEC §11 — agents never hold provider
+            # credentials). Workspaces reach models through the /llm/v1 proxy
+            # with a project-scoped token, never directly.
           resources:
             {{- toYaml .Values.t3.resources | nindent 12 }}
           readinessProbe:

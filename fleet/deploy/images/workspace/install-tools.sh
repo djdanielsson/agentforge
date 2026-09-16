@@ -30,5 +30,16 @@ export PATH="$TOOLS/bin:$PATH"
 npm install -g --prefix "$TOOLS" --no-fund --no-audit \
   "opencode-ai@${OPENCODE_VERSION}" "t3@${T3_VERSION}"
 
+# Upstream T3 v0.0.40 crashes while formatting the error it should show:
+# `openCodeRuntimeErrorDetail` calls `cause.message.trim()` without checking
+# that `message` is a string, so an opencode failure whose Error carries no
+# message (e.g. the 401 from a misconfigured gateway token) surfaces as
+# `TypeError: Cannot read properties of undefined (reading 'trim')` instead
+# of the real cause. Patch the installed bundle defensively; re-check on bump.
+if [ -f "$TOOLS/lib/node_modules/t3/dist/bin.mjs" ]; then
+  sed -i 's/cause\.message\.trim()\.length/((typeof cause.message === "string" ? cause.message : "")).trim().length/; s/return cause\.message\.trim()/return (typeof cause.message === "string" ? cause.message : "").trim()/' \
+    "$TOOLS/lib/node_modules/t3/dist/bin.mjs" || true
+fi
+
 node --version
 "$TOOLS/bin/opencode" --version
