@@ -157,6 +157,27 @@ def write_file(project: str, payload: dict[str, Any] = Body(...)) -> dict[str, A
         raise _translate(exc) from exc
 
 
+@router.delete("/projects/{project}/files/content")
+def delete_file(project: str, path: str = Query(...)) -> dict[str, Any]:
+    try:
+        return service.delete_file(project, path)
+    except Exception as exc:  # noqa: BLE001
+        raise _translate(exc) from exc
+
+
+@router.get("/projects/{project}/files/status")
+def git_status(project: str) -> dict[str, Any]:
+    """Branch plus uncommitted changes for the editor header.
+
+    Declared before `files/content` is irrelevant (distinct paths), but kept
+    with the other file routes.
+    """
+    try:
+        return service.git_status(project)
+    except Exception as exc:  # noqa: BLE001
+        raise _translate(exc) from exc
+
+
 @router.get("/projects/{project}/agents")
 def list_agents(project: str) -> dict[str, Any]:
     try:

@@ -676,6 +676,9 @@ def list_files(project_name_or_id: str, path: str = "") -> dict[str, Any]:
                 "size": int(_) if str(_).isdigit() else 0,
             }
         )
+    # Directories first, then alphabetical: the shell sort above is by name
+    # only so that this ordering is stable regardless of locale in the pod.
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
     return {"path": rel, "entries": entries, "truncated": truncated}
 
 
@@ -696,6 +699,10 @@ def read_file(project_name_or_id: str, path: str) -> dict[str, Any]:
             'test -f "$target" || { echo NOT_A_FILE; exit 3; }; '
             f'size=$(wc -c < "$target"); '
             f'if [ "$size" -gt {MAX_FILE_BYTES} ]; then echo "TOO_LARGE:$size"; exit 4; fi; '
+            # NUL-byte probe via od: the shell cannot hold a NUL in a variable,
+            # so grep-for-NUL directly never matches. od prints hex instead.
+            'if head -c 8192 "$target" 2>/dev/null | od -An -tx1 2>/dev/null | grep -q " 00"; then '
+            'echo BINARY; exit 5; fi; '
             'cat "$target"',
         ],
     )
@@ -703,9 +710,85 @@ def read_file(project_name_or_id: str, path: str) -> dict[str, Any]:
         raise NotFound(f"no file {rel} in this project")
     if result.exit_code == 4:
         raise Conflict(f"{rel} is larger than the {MAX_FILE_BYTES}-byte read limit")
+    if result.exit_code == 5:
+        raise Conflict(f"{rel} looks like a binary file; it is not shown here")
     if result.exit_code != 0:
         raise Conflict(f"could not read {rel}: {(result.stderr or result.stdout)[-300:]}")
     return {"path": rel, "content": result.stdout or "", "size": len(result.stdout or "")}
+
+
+def delete_file(project_name_or_id: str, path: str) -> dict[str, Any]:
+    """Delete one file or directory in the repository.
+
+    Same jail and read-only prefixes as writes. Directories are removed
+    recursively — the path guard keeps that inside the project's own repo.
+    """
+    import shlex
+
+    provider, reference, root, project_id = _resolve_repo(project_name_or_id)
+    rel = _safe_relpath(path)
+    if not rel:
+        raise Conflict("refusing to delete the repository root")
+    if rel == ".git" or rel == ".fleet" or rel.startswith(READ_ONLY_PREFIXES):
+        raise Conflict(f"{rel} is managed by git or fleet; it cannot be deleted here")
+    target = f"{root}/{rel}"
+    result = provider.execute(
+        reference,
+        [
+            "/bin/bash",
+            "-lc",
+            f"set -u; target={shlex.quote(target)}; "
+            'test -e "$target" || { echo NOT_FOUND; exit 3; }; '
+            'rm -rf "$target" && echo DELETED',
+        ],
+    )
+    if result.exit_code == 3:
+        raise NotFound(f"no file {rel} in this project")
+    if result.exit_code != 0 or "DELETED" not in (result.stdout or ""):
+        raise Conflict(f"could not delete {rel}: {(result.stderr or result.stdout)[-300:]}")
+    publish_sync(
+        "file.deleted",
+        message=f"{rel} deleted",
+        project_id=project_id,
+        payload={"path": rel},
+    )
+    return {"path": rel, "deleted": True}
+
+
+def git_status(project_name_or_id: str) -> dict[str, Any]:
+    """Branch plus uncommitted changes: what the editor header shows."""
+    import shlex
+
+    provider, reference, root, _ = _resolve_repo(project_name_or_id)
+    result = provider.execute(
+        reference,
+        [
+            "/bin/bash",
+            "-lc",
+            f"set -u; root={shlex.quote(root)}; "
+            'cd "$root" || { echo NO_REPO; exit 3; }; '
+            'echo "BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)"; '
+            "git status --porcelain=v1 -uall 2>/dev/null | head -n 101",
+        ],
+    )
+    if result.exit_code == 3:
+        raise NotFound("this workspace has no git checkout")
+    if result.exit_code != 0:
+        raise Conflict(f"could not read git status: {(result.stderr or result.stdout)[-300:]}")
+    branch = "none"
+    changes: list[dict[str, str]] = []
+    truncated = False
+    for line in (result.stdout or "").splitlines():
+        if line.startswith("BRANCH="):
+            branch = line.split("=", 1)[1].strip() or "none"
+            continue
+        if len(line) < 4:
+            continue
+        if len(changes) >= 100:
+            truncated = True
+            break
+        changes.append({"status": line[:2], "path": line[3:].strip()})
+    return {"branch": branch, "clean": not changes, "changes": changes, "truncated": truncated}
 
 
 def write_file(project_name_or_id: str, path: str, content: str = "") -> dict[str, Any]:

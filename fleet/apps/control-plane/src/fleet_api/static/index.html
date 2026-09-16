@@ -172,6 +172,10 @@
     </section>
     <section class="panel">
       <h2>Files</h2>
+      <div class="row between">
+        <span class="dim mono" id="fbranch">branch: …</span>
+        <span class="dim mono" id="fdirty"></span>
+      </div>
       <div class="grid2">
         <div>
           <label for="fproject">Project</label>
@@ -186,11 +190,14 @@
           </div>
         </div>
       </div>
-      <div id="flist" style="margin-top:8px"><span class="dim">pick a project, then list</span></div>
-      <label for="fedit">Editor — <span id="fopen" class="mono">no file open</span></label>
+      <div id="fcrumbs" class="row mono dim" style="margin-top:8px"></div>
+      <div id="flist" style="margin-top:4px"><span class="dim">pick a project, then list</span></div>
+      <label for="fedit">Editor — <span id="fopen" class="mono">no file open</span><span id="funsaved" class="err"></span></label>
       <textarea id="fedit" class="mono" rows="18" spellcheck="false" placeholder="click a file above to open it"></textarea>
       <div class="row" style="margin-top:8px">
         <button class="primary" id="fsave">Save file</button>
+        <button id="fnew">New file</button>
+        <button id="fdel">Delete</button>
         <input id="fmsg" placeholder="commit message (optional)" style="flex:1">
         <button id="fcommit">Commit</button>
         <span class="dim" id="fstatus"></span>
@@ -237,7 +244,47 @@ async function api(path, options = {}) {
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const cls = (s) => "status s-" + String(s || "unknown").toLowerCase();
-const files = { path: "", openPath: "" };
+const files = { path: "", openPath: "", dirty: false };
+
+function markClean() {
+  files.dirty = false;
+  document.getElementById("funsaved").textContent = "";
+}
+document.getElementById("fedit").addEventListener("input", () => {
+  if (!files.openPath) return;
+  files.dirty = true;
+  document.getElementById("funsaved").textContent = " ● unsaved";
+});
+
+function renderCrumbs() {
+  const host = document.getElementById("fcrumbs");
+  const parts = files.path.split("/").filter(Boolean);
+  let html = `<a href="#" data-crumb="">root</a>`;
+  let acc = "";
+  for (const part of parts) {
+    acc = acc ? acc + "/" + part : part;
+    html += ` <span>/</span> <a href="#" data-crumb="${esc(acc)}">${esc(part)}</a>`;
+  }
+  host.innerHTML = html;
+}
+document.getElementById("fcrumbs").addEventListener("click", (event) => {
+  const link = event.target.closest("a[data-crumb]");
+  if (!link) return;
+  event.preventDefault();
+  document.getElementById("fpath").value = link.dataset.crumb;
+  loadFiles();
+});
+
+async function loadGitStatus() {
+  const project = fileProject();
+  if (!project) return;
+  try {
+    const st = await api(`/api/v1/projects/${encodeURIComponent(project)}/files/status`);
+    document.getElementById("fbranch").textContent = "branch: " + st.branch;
+    const n = (st.changes || []).length;
+    document.getElementById("fdirty").textContent = st.clean ? "clean" : `${n} uncommitted change${n === 1 ? "" : "s"}`;
+  } catch { /* listing below will surface the error */ }
+}
 
 function renderProjects() {
   const host = document.getElementById("projects");
@@ -337,9 +384,13 @@ async function loadFiles() {
   const path = document.getElementById("fpath").value.trim();
   status.textContent = "listing…";
   try {
-    const body = await api(`/api/v1/projects/${encodeURIComponent(project)}/files?path=${encodeURIComponent(path)}`);
+    const [body] = await Promise.all([
+      api(`/api/v1/projects/${encodeURIComponent(project)}/files?path=${encodeURIComponent(path)}`),
+      loadGitStatus(),
+    ]);
     files.path = body.path || "";
     document.getElementById("fpath").value = files.path;
+    renderCrumbs();
     host.innerHTML = body.entries.length ? body.entries.map((e) =>
       `<div class="row" style="padding:2px 0">
         <span class="mono">${e.is_dir ? "📁" : "📄"}</span>
@@ -360,6 +411,7 @@ async function openFile(path) {
     files.openPath = body.path;
     document.getElementById("fopen").textContent = body.path;
     document.getElementById("fedit").value = body.content || "";
+    markClean();
     status.textContent = `${body.size} bytes`;
   } catch (error) { status.textContent = error.message; }
 }
@@ -387,7 +439,38 @@ document.getElementById("fproject").addEventListener("change", () => {
   files.openPath = "";
   document.getElementById("fopen").textContent = "no file open";
   document.getElementById("fedit").value = "";
+  markClean();
   loadFiles();
+});
+document.getElementById("fnew").addEventListener("click", () => {
+  const project = fileProject();
+  if (!project) return;
+  const name = prompt("New file path, relative to the repo root (e.g. notes/todo.md):");
+  if (!name || !name.trim()) return;
+  const base = document.getElementById("fpath").value.trim().replace(/\/+$/, "");
+  const rel = (base ? base + "/" : "") + name.trim().replace(/^\/+/, "");
+  files.openPath = rel;
+  document.getElementById("fopen").textContent = rel + " (new)";
+  document.getElementById("fedit").value = "";
+  files.dirty = true;
+  document.getElementById("funsaved").textContent = " ● unsaved";
+  document.getElementById("fedit").focus();
+});
+document.getElementById("fdel").addEventListener("click", async () => {
+  const project = fileProject();
+  const status = document.getElementById("fstatus");
+  if (!files.openPath) { status.textContent = "open a file first"; return; }
+  if (!confirm(`delete ${files.openPath} from ${project}?`)) return;
+  status.textContent = "deleting…";
+  try {
+    await api(`/api/v1/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(files.openPath)}`, { method: "DELETE" });
+    files.openPath = "";
+    document.getElementById("fopen").textContent = "no file open";
+    document.getElementById("fedit").value = "";
+    markClean();
+    status.textContent = "deleted — commit to keep it deleted in git";
+    loadFiles();
+  } catch (error) { status.textContent = error.message; }
 });
 document.getElementById("fsave").addEventListener("click", async () => {
   const project = fileProject();
@@ -399,6 +482,7 @@ document.getElementById("fsave").addEventListener("click", async () => {
       method: "PUT", body: JSON.stringify({ path: files.openPath, content: document.getElementById("fedit").value }),
     });
     status.textContent = `saved ${out.bytes} bytes — commit to keep it in git`;
+    markClean();
     loadFiles();
   } catch (error) { status.textContent = error.message; }
 });
@@ -543,6 +627,11 @@ function connect() {
     feed.prepend(row);
     while (feed.children.length > 150) feed.removeChild(feed.lastChild);
     if (/task\.(completed|failed)|workspace\.(ready|failed)|agent\./.test(event.type)) refresh().catch(() => {});
+    // An agent committing underneath us changes the tree out from under the
+    // browser: reload the listing (never the textarea) so it stays truthful.
+    if (/task\.(completed|failed)|commit\.created/.test(event.type)) {
+      if (document.getElementById("fproject").value) loadFiles().catch(() => {});
+    }
   };
 }
 

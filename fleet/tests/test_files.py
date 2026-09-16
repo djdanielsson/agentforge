@@ -143,3 +143,52 @@ def test_commit_without_a_message_gets_a_sensible_default(client, fake_provider,
 
     body = client.post("/api/v1/projects/demo-commit2/workspace/commit", json={}).json()
     assert body["commit"] == "abc123"
+
+
+def test_delete_removes_a_file_and_is_recorded(client, fake_provider, clean_db):
+    client.post("/api/v1/projects", json={"name": "demo-del"})
+    fake_provider.respond("rm -rf", "DELETED\n", 0)
+
+    body = client.delete(
+        "/api/v1/projects/demo-del/files/content", params={"path": "old.txt"}
+    ).json()
+    assert body == {"path": "old.txt", "deleted": True}
+    assert any("rm -rf" in " ".join(command) for _, command in fake_provider.commands)
+
+
+def test_delete_refuses_the_repo_root_and_managed_paths(client, fake_provider, clean_db):
+    client.post("/api/v1/projects", json={"name": "demo-del2"})
+    before = len(fake_provider.commands)
+
+    assert (
+        client.delete("/api/v1/projects/demo-del2/files/content", params={"path": "/"}).status_code
+        == 409
+    )
+    assert (
+        client.delete(
+            "/api/v1/projects/demo-del2/files/content", params={"path": ".git/HEAD"}
+        ).status_code
+        == 409
+    )
+    assert len(fake_provider.commands) == before
+
+
+def test_git_status_reports_branch_and_changes(client, fake_provider, clean_db):
+    client.post("/api/v1/projects", json={"name": "demo-gs"})
+    fake_provider.respond(
+        "git status", "BRANCH=main\n M src/app.py\n?? new.txt\n", 0
+    )
+
+    body = client.get("/api/v1/projects/demo-gs/files/status").json()
+    assert body["branch"] == "main"
+    assert body["clean"] is False
+    assert {"status": " M", "path": "src/app.py"} in body["changes"]
+    assert {"status": "??", "path": "new.txt"} in body["changes"]
+
+
+def test_directories_sort_before_files(client, fake_provider, clean_db):
+    client.post("/api/v1/projects", json={"name": "demo-sort"})
+    fake_provider.respond("find ", "f\t1\tzebra.txt\nd\t0\tapple\n", 0)
+
+    body = client.get("/api/v1/projects/demo-sort/files").json()
+    assert [entry["name"] for entry in body["entries"]] == ["apple", "zebra.txt"]
